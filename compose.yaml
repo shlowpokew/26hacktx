@@ -1,0 +1,26 @@
+name: ros2
+services:
+  mapping:
+    image: local/ros2-robot:jazzy
+    build:
+      context: .
+      args:
+        ROS_BASE: ${ROS_BASE:-ros:jazzy-ros-base-noble}
+    restart: unless-stopped
+    init: true
+    network_mode: host
+    environment:
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-42}
+      RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
+      USE_SIM_TIME: ${USE_SIM_TIME:-false}
+    volumes:
+      - ./config:/config:ro
+      - ./maps:/maps
+      - ./bags:/bags
+    working_dir: /maps
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

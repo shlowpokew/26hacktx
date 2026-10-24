@@ -1,0 +1,5 @@
+maps
+bags
+*.tar.gz
+.git
+__pycache__
