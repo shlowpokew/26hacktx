@@ -1,6 +1,6 @@
 import os
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, RegisterEventHandler, EmitEvent
+from launch.actions import ExecuteProcess, IncludeLaunchDescription, RegisterEventHandler, EmitEvent
 from launch.event_handlers import OnProcessExit
 from launch.events import Shutdown
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -19,5 +19,9 @@ def generate_launch_description():
                 'use_sim_time': os.environ.get('USE_SIM_TIME', 'false'),
                 'slam_params_file': '/config/slam.yaml',
             }.items(),
+        ),
+        ExecuteProcess(
+            cmd=['python3', '/opt/robot/arduino_bridge.py'],
+            output='screen',
         ),
     ])

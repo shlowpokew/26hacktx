@@ -98,6 +98,42 @@ interface/IP setup instead. Set ROS_DOMAIN_ID consistently on participating
 machines. Host networking here is intended for Linux. Tailscale alone does not
 make ROS DDS multicast discovery work across remote networks.
 
+## Arduino R4 WiFi communication
+
+The stack includes a small UDP bridge for an Arduino UNO R4 WiFi. It starts
+with mapping and is safe to run before the Arduino is connected: with no
+`ARDUINO_IP`, it only listens for telemetry on UDP port 4211 and logs that
+commands cannot be sent. Set the Arduino's address in `.env` before starting
+the service:
+
+```dotenv
+ARDUINO_IP=192.168.1.50
+ARDUINO_PORT=4210
+ARDUINO_LOCAL_PORT=4211
+```
+
+Copy [arduino_r4_wifi/arduino_r4_wifi.ino](arduino_r4_wifi/arduino_r4_wifi.ino)
+into the Arduino IDE, set the WiFi credentials and the ROS computer's LAN IP,
+then upload it. The bridge publishes each received newline-delimited JSON
+message as a `std_msgs/msg/String` on `/arduino/telemetry`. Publish a string
+on `/arduino/command` to send a command; the bridge wraps it as
+`{"type":"command","data":"..."}`. It also sends a periodic ping and the
+example responds with `pong`.
+
+Test the ROS side without hardware:
+
+```sh
+sudo docker compose exec mapping bash -lc \
+  'source /opt/ros/jazzy/setup.bash; ros2 topic echo /arduino/telemetry'
+sudo docker compose exec mapping bash -lc \
+  'source /opt/ros/jazzy/setup.bash; ros2 topic pub --once /arduino/command std_msgs/msg/String "{data: test}"'
+```
+
+The Arduino and ROS host must be on a network that permits UDP traffic between
+ports 4210 and 4211. This is intentionally a simple starting protocol; motor
+and sensor behavior should be added to the sketch only after the hardware
+interfaces and command safety requirements are defined.
+
 ## Operation
 
 ```sh

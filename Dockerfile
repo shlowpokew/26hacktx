@@ -10,4 +10,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && dpkg-query -W > /opt/ros/package-manifest.txt \
     && rm -rf /var/lib/apt/lists/*
 COPY mapping.launch.py /opt/robot/mapping.launch.py
+COPY arduino_bridge.py /opt/robot/arduino_bridge.py
+RUN chmod +x /opt/robot/arduino_bridge.py
 CMD ["ros2", "launch", "/opt/robot/mapping.launch.py"]

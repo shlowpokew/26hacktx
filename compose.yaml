@@ -13,6 +13,9 @@ services:
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-42}
       RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
       USE_SIM_TIME: ${USE_SIM_TIME:-false}
+      ARDUINO_IP: ${ARDUINO_IP:-}
+      ARDUINO_PORT: ${ARDUINO_PORT:-4210}
+      ARDUINO_LOCAL_PORT: ${ARDUINO_LOCAL_PORT:-4211}
     volumes:
       - ./config:/config:ro
       - ./maps:/maps
