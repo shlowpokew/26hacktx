@@ -5,9 +5,17 @@ Includes SLAM Toolbox, Nav2, robot_localization, Cyclone DDS, ROS bag recording,
 and build tools. Host installer supports systemd Ubuntu/Debian, including
 64-bit Raspberry Pi OS. No ROS installation is needed on the host.
 
+Keep the ROS service running on the robot and iterate from your GitHub repo:
+pull changes on the robot, apply them to the running service, and keep going.
+Docker runs in the background and restarts the service after reboots. You do
+not need to manually delete containers or rerun the installer for each update.
+Updates are applied when you run the commands below; there is no automatic
+Git polling or live reload of running ROS nodes.
+
 ## Install on the robot
 
-Copy this entire directory to ~/etc/ros2 on the Linux robot, then run:
+Clone your GitHub repository onto the Linux robot, keeping this directory at
+~/etc/ros2 (or copy an existing Git checkout there), then run:
 
 ```sh
 cd ~/etc/ros2
@@ -19,6 +27,59 @@ builds the ROS image, copies upstream SLAM defaults into config/slam.yaml,
 and starts mapping. Existing Docker installations are preserved; conflicting
 packages may need resolving if Docker's package installer reports a conflict.
 Tailscale should run separately on the host.
+
+## Iterate with Git while the ROS service stays active
+
+Make and commit changes in your development checkout, then push them to GitHub.
+On the robot, pull those changes into the checkout used by Compose:
+
+```sh
+cd ~/etc/ros2
+git pull --ff-only
+```
+
+Keep robot-specific edits committed or otherwise resolved before pulling.
+Run Git on the host; the container does not need its own Git checkout.
+
+For changes to config/slam.yaml, restart mapping to load the updated parameters:
+
+```sh
+sudo docker compose restart mapping
+```
+
+The config/ directory is mounted into the active container, so pulled config
+changes are already visible inside it. Restarting makes ROS load them. The same
+container is reused, with a brief interruption while mapping restarts.
+
+For changes to mapping.launch.py, the Dockerfile, or installed dependencies:
+
+```sh
+sudo docker compose up -d --build mapping
+```
+
+Compose builds the updated image while the existing container runs, then
+replaces the container if its image or service configuration changed. Mapping
+briefly stops during replacement. The service continues in the background;
+maps/ and bags/ persist on the host. You do not need to run `docker compose down`
+first. Changes to compose.yaml or .env also require `docker compose up -d` to
+apply the new service configuration.
+
+Check the result after updating:
+
+```sh
+sudo docker compose ps
+sudo docker compose logs -f --tail 100 mapping
+```
+
+Press Ctrl+C to stop following logs; the container keeps running.
+
+Currently only config/, maps/, and bags/ are mounted. Source code such as
+mapping.launch.py is copied into the image, so a Git pull alone does not update
+that code inside the active container. If you add a ROS workspace for frequent
+package development, mount it into the container, build it with
+`colcon build --symlink-install`, source its `install/setup.bash`, and restart
+the affected nodes after changes. C++ changes require rebuilding; running nodes
+do not automatically reload edited code.
 
 ## Required hardware integration
 
