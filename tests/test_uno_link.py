@@ -11,6 +11,7 @@ from uno_link import (  # noqa: E402
     NO_RETURN,
     crc8,
     encode_control,
+    parse_encoder_line,
     parse_manual_command,
     sector_minimums,
     split_lines,
@@ -122,6 +123,12 @@ class ParseManualCommandTest(unittest.TestCase):
 
 
 class SplitLinesTest(unittest.TestCase):
+    def test_encoder_line(self) -> None:
+        self.assertEqual(parse_encoder_line("enc 4294967295 -12 34"), (4294967295, -12, 34))
+        for text in ["enc 1 2", "enc 1 2 x", "st=idle l=0 r=0", ""]:
+            with self.subTest(text=text):
+                self.assertIsNone(parse_encoder_line(text))
+
     def test_holds_partial_lines_until_newline(self) -> None:
         buffer = bytearray()
         self.assertEqual(split_lines(buffer, b"st=idle l=0"), [])

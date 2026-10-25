@@ -4,7 +4,7 @@
 Every 50 ms this sends one control frame: wheel PWM from the /cmd_vel PID
 loop, the mission state, and the nearest LiDAR return per 45 degree sector,
 which the Uno uses for its own collision stop. The frame encoding lives in
-uno_link.py.
+uno_link.py. Wheel encoder counts from the Uno go out on /wheel/ticks.
 """
 
 import os
@@ -16,13 +16,14 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import LaserScan
-from std_msgs.msg import Float32MultiArray, String
+from std_msgs.msg import Float32MultiArray, Int64MultiArray, String
 
 from uno_link import (
     MISSION_CODES,
     NO_RETURN,
     SECTORS,
     encode_control,
+    parse_encoder_line,
     parse_manual_command,
     sector_minimums,
     split_lines,
@@ -72,6 +73,7 @@ class ArduinoBridge(Node):
         self._rx = bytearray()
 
         self._telemetry = self.create_publisher(String, "/arduino/telemetry", 10)
+        self._ticks = self.create_publisher(Int64MultiArray, "/wheel/ticks", 10)
         self._safety_publisher = self.create_publisher(String, "/safety/warning", 10)
         self._mission_state = self.create_subscription(
             String, "/mission/state", self._set_mission_state, 10
@@ -296,6 +298,12 @@ class ArduinoBridge(Node):
             self._close(error)
             return
         for text in split_lines(self._rx, chunk):
+            encoder = parse_encoder_line(text)
+            if encoder is not None:
+                ticks = Int64MultiArray()
+                ticks.data = list(encoder)
+                self._ticks.publish(ticks)
+                continue
             output = String()
             output.data = text
             self._telemetry.publish(output)

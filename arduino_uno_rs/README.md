@@ -34,6 +34,9 @@ for the Uno, the DRV8833 and the Pi. Here's what the Uno connects to:
 | D5 / D6 | DRV8833 IN1 / IN2 (left motor) |
 | D9 / D10 | DRV8833 IN3 / IN4 (right motor) |
 | D8 | DRV8833 EEP (sleep) |
+| D2 / D4 | left encoder A (yellow) / B (green) |
+| D3 / D7 | right encoder A (yellow) / B (green) |
+| 5V / GND | encoder VCC / GND |
 | GND | DRV8833 GND and battery − |
 
 The 6×AA pack's + goes to the DRV8833's VCC and nowhere else, never to the
@@ -190,6 +193,11 @@ failing.
 The Uno sends back one line of text every 200 ms, like
 `st=driving mission=follow l=150 r=130 ahead=212 near=88 bad=0`. `bad` counts
 corrupted frames.
+
+Every 20 ms it also sends `enc <ms> <left> <right>`: its `millis()` and the
+running encoder counts since boot (both edges of A, so 480 per wheel turn on
+the 25GA370). The bridge publishes these on `/wheel/ticks` for
+`encoder_odometry.py` instead of passing them through as telemetry.
 
 ## Validation status
 

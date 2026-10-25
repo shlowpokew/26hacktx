@@ -76,6 +76,10 @@ class Float32MultiArray:
         self.data = list(data or [])
 
 
+class Int64MultiArray(Float32MultiArray):
+    pass
+
+
 class Twist:
     def __init__(self, linear_x: float = 0.0, angular_z: float = 0.0) -> None:
         self.linear = types.SimpleNamespace(x=linear_x, y=0.0, z=0.0)
@@ -103,7 +107,8 @@ def install_fake_ros() -> None:
     module("sensor_msgs")
     module("sensor_msgs.msg", LaserScan=LaserScan)
     module("std_msgs")
-    module("std_msgs.msg", String=String, Float32MultiArray=Float32MultiArray)
+    module("std_msgs.msg", String=String, Float32MultiArray=Float32MultiArray,
+           Int64MultiArray=Int64MultiArray)
 
 
 install_fake_ros()
@@ -267,6 +272,12 @@ class HeartbeatTest(BridgeTestCase):
         os.write(self.bridge.master, b"st=idle mission=idle\r\nst=dri")
         self.bridge.node._receive_messages()
         self.assertEqual(self.bridge.published("/arduino/telemetry"), ["st=idle mission=idle"])
+
+    def test_encoder_counts_go_to_wheel_ticks_not_telemetry(self) -> None:
+        os.write(self.bridge.master, b"enc 1020 15 -7\r\nst=idle\r\n")
+        self.bridge.node._receive_messages()
+        self.assertEqual(self.bridge.published("/wheel/ticks"), [[1020, 15, -7]])
+        self.assertEqual(self.bridge.published("/arduino/telemetry"), ["st=idle"])
 
     def test_shutdown_sends_a_stop_frame(self) -> None:
         self.bridge.publish("/arduino/command", String("motor forward 100"))

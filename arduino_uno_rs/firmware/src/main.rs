@@ -1,6 +1,6 @@
 //! Arduino Uno firmware: wheel PWM, mission state and LiDAR sectors in from
-//! the Pi over USB serial; DRV8833 motor PWM out; kaomoji on a 16x2 I2C LCD
-//! (A4 SDA, A5 SCL).
+//! the Pi over USB serial; DRV8833 motor PWM out; wheel encoder counts back
+//! to the Pi; kaomoji on a 16x2 I2C LCD (A4 SDA, A5 SCL).
 //!
 //! All decisions live in `uno_brain`; this file just wires it to pins.
 
@@ -9,6 +9,7 @@
 #![feature(abi_avr_interrupt)]
 
 mod clock;
+mod encoders;
 mod lcd;
 mod motors;
 mod rx;
@@ -23,6 +24,7 @@ use uno_brain::fsm::{Brain, Drive};
 use uno_brain::protocol::Parser;
 
 const CONTROL_MS: u32 = 20;
+const ENCODER_MS: u32 = 20;
 const DISPLAY_MS: u32 = 100;
 const REPORT_MS: u32 = 200;
 const LCD_RETRY_MS: u32 = 2000;
@@ -48,6 +50,13 @@ fn main() -> ! {
     );
 
     clock::init(dp.TC2);
+    encoders::init(
+        dp.EXINT,
+        pins.d2.into_pull_up_input(),
+        pins.d4.into_pull_up_input(),
+        pins.d3.into_pull_up_input(),
+        pins.d7.into_pull_up_input(),
+    );
 
     #[cfg(feature = "drv8833")]
     let mut motors = motors::Drv8833::new(
@@ -74,6 +83,7 @@ fn main() -> ! {
     let mut lcd: Option<lcd::Lcd> = None;
     let mut shown: Option<Screen> = None;
     let mut next_control = 0u32;
+    let mut next_encoder = 0u32;
     let mut next_display = 0u32;
     let mut next_report = 0u32;
     let mut next_lcd_attempt = 0u32;
@@ -93,6 +103,12 @@ fn main() -> ! {
             next_control = now.wrapping_add(CONTROL_MS);
             output = brain.tick(now);
             motors.set(output);
+        }
+
+        if due(now, next_encoder) {
+            next_encoder = now.wrapping_add(ENCODER_MS);
+            let (left, right) = encoders::counts();
+            ufmt::uwriteln!(&mut serial, "enc {} {} {}\r", now, left, right).unwrap_infallible();
         }
 
         if due(now, next_display) {

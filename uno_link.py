@@ -71,6 +71,17 @@ def parse_manual_command(text: str) -> Optional[tuple[int, int]]:
     return None
 
 
+def parse_encoder_line(text: str) -> Optional[tuple[int, int, int]]:
+    """`enc <uno ms> <left> <right>` from the Uno: running counts since boot."""
+    words = text.split()
+    if len(words) != 4 or words[0] != "enc":
+        return None
+    try:
+        return int(words[1]), int(words[2]), int(words[3])
+    except ValueError:
+        return None
+
+
 def split_lines(buffer: bytearray, chunk: bytes) -> list[str]:
     """Append serial bytes to `buffer`, return the complete non-empty lines."""
     buffer.extend(chunk)

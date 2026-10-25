@@ -120,9 +120,10 @@ Check `journalctl -u ros2-update`. You'll usually see one of these:
 ```
              USB                        USB
  LD19 LiDAR ─────► Raspberry Pi 5 ◄──────────► Arduino Uno ──D5,D6,D9,D10,D8──► DRV8833 ──► motors
-                    │ GPIO 17/18/22/23 ◄── motor encoders          │ A4/A5 (I2C)        ▲
-                    │ GPIO 5/6        ◄── buttons A/B              ▼                    │
-                                                                 16x2 LCD     6×AA battery pack
+                    │ GPIO 5/6 ◄── buttons A/B   │  ▲                              ▲          │
+                                                 │  └── D2,D3,D4,D7 ◄── encoders ──┼──────────┘
+                                                 ▼ A4/A5 (I2C)                     │
+                                               16x2 LCD                    6×AA battery pack
 ```
 
 The Uno gets its power from the Pi over USB. The battery only powers the
@@ -135,13 +136,17 @@ Both headers in board order, USB socket on the left:
 ```
 Top header (digital)
   SCL  SDA  AREF GND  13   12   11   10   9    8   │  7    6    5    4    3    2    1    0
-  LCD  LCD   ·    ·    ·    ·    ·   IN4  IN3  EEP │  ·   IN2  IN1   ·    ·    ·   (USB serial,
+  LCD  LCD   ·    ·    ·    ·    ·   IN4  IN3  EEP │ R B  IN2  IN1  L B  R A  L A  (USB serial,
   SCL  SDA                           ───── DRV8833 ─────────────────            leave free)
+                                                     └ encoders: L/R = left/right motor,
+                                                       A = yellow wire, B = green wire
 
 Bottom header (power and analog)
   ·  IOREF RESET 3.3V  5V   GND  GND  VIN │  A0   A1   A2   A3   A4   A5
   ·    ·     ·    ·   LCD  LCD  DRV   ·   │   ·    ·    ·    ·   LCD  LCD
                       VCC  GND  GND                              SDA  SCL
+                      enc  enc
+                      VCC  GND
 ```
 
 | Uno pin | Goes to | Notes |
@@ -155,6 +160,11 @@ Bottom header (power and analog)
 | D9 | DRV8833 IN3 | right motor |
 | D10 | DRV8833 IN4 | right motor |
 | D8 | DRV8833 EEP (sleep) | the firmware holds it high, which turns the driver on |
+| D2 | left encoder A (yellow) | interrupt pin |
+| D4 | left encoder B (green) | |
+| D3 | right encoder A (yellow) | interrupt pin |
+| D7 | right encoder B (green) | |
+| 5V / GND | both encoders' VCC / GND | |
 | GND | DRV8833 GND | grounds have to be shared or nothing works |
 | USB | Raspberry Pi USB | power and the serial link |
 | D0, D1 | nothing | the USB serial link uses them |
@@ -186,18 +196,20 @@ rover on the floor.
 ### Raspberry Pi GPIO
 
 Each motor has six wires. The two power wires go to the DRV8833 and the four
-encoder wires (VCC, GND, A, B) go to the Pi. The pin numbers below are
-physical header positions, and "GPIO n" is the BCM number you put in `.env`.
+encoder wires (VCC, GND, A yellow, B green) go to the Uno (see
+[Arduino Uno pins](#arduino-uno-pins)). Only the buttons are on the Pi now. The
+pin numbers below are physical header positions, and "GPIO n" is the BCM
+number you put in `.env`.
 
 ```
-                         3.3V  (1)  (2)  5V      ← encoder VCC (both motors)
+                         3.3V  (1)  (2)  5V
      [LCD SDA, if on Pi] GPIO2 (3)  (4)  5V
-     [LCD SCL, if on Pi] GPIO3 (5)  (6)  GND     ← encoder GND
+     [LCD SCL, if on Pi] GPIO3 (5)  (6)  GND
                          GPIO4 (7)  (8)  GPIO14
                            GND (9)  (10) GPIO15
-       left encoder A   GPIO17 (11) (12) GPIO18  left encoder B
+                        GPIO17 (11) (12) GPIO18
                         GPIO27 (13) (14) GND
-       right encoder A  GPIO22 (15) (16) GPIO23  right encoder B
+                        GPIO22 (15) (16) GPIO23
                           3.3V (17) (18) GPIO24
                         GPIO10 (19) (20) GND
                          GPIO9 (21) (22) GPIO25
@@ -214,23 +226,12 @@ physical header positions, and "GPIO n" is the BCM number you put in `.env`.
 
 | Pi pin | GPIO (BCM) | Goes to | `.env` setting |
 | --- | --- | --- | --- |
-| 11 | 17 | left encoder A | `LEFT_ENCODER_A_BCM` |
-| 12 | 18 | left encoder B | `LEFT_ENCODER_B_BCM` |
-| 15 | 22 | right encoder A | `RIGHT_ENCODER_A_BCM` |
-| 16 | 23 | right encoder B | `RIGHT_ENCODER_B_BCM` |
-| 2 or 4 | 5V | encoder VCC | |
-| 6 (or any GND) | GND | encoder GND | |
 | 29 | 5 | button A, other leg to GND | `BUTTON_A_BCM` |
 | 31 | 6 | button B, other leg to GND | `BUTTON_B_BCM` |
 | 3, 5 | 2, 3 | LCD SDA, SCL, only if the LCD is on the Pi instead of the Uno | |
 
 The buttons use the Pi's internal pull-ups. Each button just shorts its GPIO
 to GND when pressed, so you don't need a resistor.
-
-Watch out with the encoders: their signals are 5 V, and the Pi's GPIO is
-3.3 V and not 5 V tolerant. Put a level shifter or a resistor divider on each
-A/B wire, or confirm the encoder outputs stay at or below 3.3 V, before you
-connect them.
 
 The LiDAR and the Uno can go in any of the Pi's USB ports. udev names them
 `/dev/lidar` and `/dev/uno` no matter which port they're in.
@@ -345,20 +346,20 @@ mounted. The container won't start unless the LiDAR is plugged in.
 
 ### Odometry
 
-Encoder inputs default to BCM GPIO 17/18 on the left and 22/23 on the right
-(see [Raspberry Pi GPIO](#raspberry-pi-gpio)). The odometry node publishes
-`/odom` and the `odom -> base_link` transform at 50 Hz. If the Pi 5 exposes
-its GPIO chip under a different `/dev/gpiochip*` name, set `GPIO_DEVICE`; the
-container maps whatever you pick to `/dev/gpiochip4`.
+The encoders are wired to the Uno (D2/D4 left, D3/D7 right). It counts them
+and sends `enc <uno ms> <left> <right>` every 20 ms. `arduino_bridge.py`
+republishes that on `/wheel/ticks`, and the odometry node turns it into
+`/odom`, the `odom -> base_link` transform and `/wheel/velocity` at 50 Hz.
 
 The 25GA370 motor listing says its quadrature encoder gives 240 pulses per
-output-shaft revolution, so `ENCODER_TICKS_PER_REV` defaults to 240. To check,
-turn a wheel exactly once and see how much that encoder's GPIO Zero `steps`
-changes. Calibrate `DRIVE_WHEEL_RADIUS_M` and `DRIVE_WHEEL_BASE_M` on the
-assembled rover. If forward rotation makes an encoder count go down, set
-`LEFT_ENCODER_SIGN` or `RIGHT_ENCODER_SIGN` to `-1`. The listing also says the
-encoders need a 5 V supply, which is why their A/B outputs need level
-shifting before they reach the Pi (see the warning above).
+output-shaft revolution. The Uno counts both edges of the A channel, which is
+two counts per pulse, so `ENCODER_TICKS_PER_REV` defaults to 480. To check,
+watch `ros2 topic echo /wheel/ticks`, turn a wheel exactly once, and see how
+much its count changes. Calibrate `DRIVE_WHEEL_RADIUS_M` and
+`DRIVE_WHEEL_BASE_M` on the assembled rover. If forward rotation makes an
+encoder count go down, set `LEFT_ENCODER_SIGN` or `RIGHT_ENCODER_SIGN` to
+`-1`. The encoders run on 5 V, which the Uno's inputs take directly, so no
+level shifting is needed.
 
 SLAM Toolbox gets wheel odometry on `/odom`, so double-check the encoder pins,
 tick count, wheel radius and wheel spacing on the real rover. The TF chain
