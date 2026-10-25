@@ -155,17 +155,39 @@ drivers, and play the bag with `--clock`. Set it back to `false` for live runs.
 
 ## What's still needed for real mapping
 
-This is a software foundation, not a finished robot. SLAM Toolbox needs a 2D
-LiDAR publishing `/scan` and the TF chain `odom -> base_link -> <laser frame>`.
-Neither a LiDAR driver nor wheel/IMU odometry is configured yet. Set
-`scan_topic`, `base_frame`, `odom_frame` and `map_frame` in `config/slam.yaml`
-to match your robot. Nav2 is installed but not launched.
+The container builds LDROBOT's ROS 2 driver v3.0.3 for the LD19/D300 and
+launches it on `/dev/lidar` at 230400 baud. A scan filter publishes `/scan` in
+the `laser` frame, retaining ranges from 0.15 m through 8.0 m and marking
+other readings NaN. Encoder inputs default to BCM GPIO 17/18 on the left and
+22/23 on the right. The odometry node publishes `/odom` and `odom -> base_link`
+at 50 Hz.
+The installer adds the persistent udev rule for USB ID `1e4e:aa68`; reconnect
+the LiDAR after installation and confirm it appears as `/dev/lidar`. Set
+`LIDAR_X_M`, `LIDAR_Y_M`, `LIDAR_Z_M`, and `LIDAR_YAW_RAD` in `.env` to match
+its mounted pose. `LIDAR_MIN_RANGE_M` and `LIDAR_MAX_RANGE_M` configure the
+scan window. The Compose service expects the LiDAR to be connected when it
+starts. Set `GPIO_DEVICE` if the host exposes the Pi 5 GPIO chip under a
+different `/dev/gpiochip*` name; the container maps the selected device to
+`/dev/gpiochip4`.
 
-For a USB LiDAR, add its driver to the Dockerfile and a Compose service that
-maps only its `/dev/serial/by-id/...` device. Don't use privileged mode. Use
-the same `ROS_DOMAIN_ID` on every machine that talks to the robot. Host
-networking is Linux-only, and Tailscale alone does not carry DDS discovery
-across networks.
+Calibrate `DRIVE_WHEEL_RADIUS_M`, `DRIVE_WHEEL_BASE_M`, and
+`ENCODER_TICKS_PER_REV` for the installed wheels and encoder gearing. Rotate a
+wheel exactly once and measure the change in the corresponding GPIO Zero
+encoder `steps` to determine ticks per wheel revolution. Set
+`LEFT_ENCODER_SIGN` or `RIGHT_ENCODER_SIGN` to `-1` if forward wheel rotation
+decreases that encoder's count.
+
+SLAM Toolbox now receives wheel odometry on `/odom`; verify the encoder pin
+numbers, tick count, wheel radius, and wheel spacing on the assembled rover.
+The expected TF chain is `map -> odom -> base_link -> laser`. Set
+`scan_topic`, `base_frame`, `odom_frame`, and `map_frame` in `config/slam.yaml`
+to match the robot. Nav2 is installed but not launched.
+
+The human-follow, breadcrumb return, onboard buttons/display, and SOS audio
+nodes described by the full spec are not implemented yet. Nav2 is installed
+but is not launched. Use the same `ROS_DOMAIN_ID` on every machine that talks
+to the robot. Host networking is Linux-only, and Tailscale alone does not
+carry DDS discovery across networks.
 
 ## Reproducibility
 

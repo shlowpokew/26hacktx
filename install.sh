@@ -30,11 +30,14 @@ sudo docker compose version >/dev/null || {
   echo 'Docker exists but Compose plugin is missing. Install docker-compose-plugin from your Docker package repository.' >&2; exit 1;
 }
 sudo systemctl enable --now docker
+sudo install -D -m 0644 udev/99-breadcrumbs-lidar.rules /etc/udev/rules.d/99-breadcrumbs-lidar.rules
+sudo udevadm control --reload-rules
+sudo udevadm trigger --subsystem-match=tty
 mkdir -p config maps bags
 if [[ ! -f .env ]]; then
   sudo docker pull ros:jazzy-ros-base-noble
   base_digest=$(sudo docker image inspect ros:jazzy-ros-base-noble --format '{{index .RepoDigests 0}}')
-  printf 'ROS_BASE=%s\nROS_DOMAIN_ID=42\nUSE_SIM_TIME=false\nARDUINO_IP=\nARDUINO_PORT=4210\nARDUINO_LOCAL_PORT=4211\nDRIVE_WHEEL_BASE_M=0.32\nDRIVE_MAX_LINEAR_MPS=0.5\nCMD_VEL_TIMEOUT_SEC=0.5\n' "$base_digest" > .env
+  printf 'ROS_BASE=%s\nROS_DOMAIN_ID=42\nUSE_SIM_TIME=false\nARDUINO_IP=\nARDUINO_PORT=4210\nARDUINO_LOCAL_PORT=4211\nDRIVE_WHEEL_BASE_M=0.32\nDRIVE_WHEEL_RADIUS_M=0.05\nDRIVE_MAX_LINEAR_MPS=0.5\nCMD_VEL_TIMEOUT_SEC=0.5\nLIDAR_SERIAL_PORT=/dev/lidar\nLIDAR_FRAME=laser\nLIDAR_X_M=0.0\nLIDAR_Y_M=0.0\nLIDAR_Z_M=0.0\nLIDAR_YAW_RAD=0.0\nLIDAR_MIN_RANGE_M=0.15\nLIDAR_MAX_RANGE_M=8.0\nGPIO_DEVICE=/dev/gpiochip4\nGPIO_CHIP=4\nLEFT_ENCODER_A_BCM=17\nLEFT_ENCODER_B_BCM=18\nRIGHT_ENCODER_A_BCM=22\nRIGHT_ENCODER_B_BCM=23\nENCODER_TICKS_PER_REV=360\nLEFT_ENCODER_SIGN=1\nRIGHT_ENCODER_SIGN=1\nODOM_PUBLISH_RATE_HZ=50\nODOM_FRAME=odom\nBASE_FRAME=base_link\n' "$base_digest" > .env
 fi
 sudo docker compose build
 if [[ ! -f config/slam.yaml ]]; then
@@ -76,4 +79,4 @@ EOF
   printf '\nAuto-update on: pushed commits are applied within about a minute.\n'
 fi
 printf '\nInstalled. Docker starts at boot; mapping restarts unless explicitly stopped.\n'
-printf 'Mapping still needs a LiDAR driver publishing /scan and robot odometry/transforms.\n'
+printf 'Mapping needs wheel odometry publishing /odom and the odom -> base_link TF.\n'

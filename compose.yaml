@@ -9,6 +9,9 @@ services:
     restart: unless-stopped
     init: true
     network_mode: host
+    devices:
+      - /dev/lidar:/dev/lidar
+      - ${GPIO_DEVICE:-/dev/gpiochip4}:/dev/gpiochip4
     environment:
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-42}
       RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
@@ -19,6 +22,26 @@ services:
       DRIVE_WHEEL_BASE_M: ${DRIVE_WHEEL_BASE_M:-0.32}
       DRIVE_MAX_LINEAR_MPS: ${DRIVE_MAX_LINEAR_MPS:-0.5}
       CMD_VEL_TIMEOUT_SEC: ${CMD_VEL_TIMEOUT_SEC:-0.5}
+      LIDAR_SERIAL_PORT: ${LIDAR_SERIAL_PORT:-/dev/lidar}
+      LIDAR_FRAME: ${LIDAR_FRAME:-laser}
+      LIDAR_X_M: ${LIDAR_X_M:-0.0}
+      LIDAR_Y_M: ${LIDAR_Y_M:-0.0}
+      LIDAR_Z_M: ${LIDAR_Z_M:-0.0}
+      LIDAR_YAW_RAD: ${LIDAR_YAW_RAD:-0.0}
+      LIDAR_MIN_RANGE_M: ${LIDAR_MIN_RANGE_M:-0.15}
+      LIDAR_MAX_RANGE_M: ${LIDAR_MAX_RANGE_M:-8.0}
+      GPIO_CHIP: ${GPIO_CHIP:-4}
+      LEFT_ENCODER_A_BCM: ${LEFT_ENCODER_A_BCM:-17}
+      LEFT_ENCODER_B_BCM: ${LEFT_ENCODER_B_BCM:-18}
+      RIGHT_ENCODER_A_BCM: ${RIGHT_ENCODER_A_BCM:-22}
+      RIGHT_ENCODER_B_BCM: ${RIGHT_ENCODER_B_BCM:-23}
+      ENCODER_TICKS_PER_REV: ${ENCODER_TICKS_PER_REV:-360}
+      DRIVE_WHEEL_RADIUS_M: ${DRIVE_WHEEL_RADIUS_M:-0.05}
+      LEFT_ENCODER_SIGN: ${LEFT_ENCODER_SIGN:-1}
+      RIGHT_ENCODER_SIGN: ${RIGHT_ENCODER_SIGN:-1}
+      ODOM_PUBLISH_RATE_HZ: ${ODOM_PUBLISH_RATE_HZ:-50}
+      ODOM_FRAME: ${ODOM_FRAME:-odom}
+      BASE_FRAME: ${BASE_FRAME:-base_link}
     volumes:
       - ./config:/config:ro
       - ./maps:/maps

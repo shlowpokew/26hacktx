@@ -1,0 +1,1 @@
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1e4e", ATTRS{idProduct}=="aa68", SYMLINK+="lidar", MODE="0660", GROUP="dialout"
