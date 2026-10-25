@@ -25,5 +25,13 @@ COPY mapping.launch.py /opt/robot/mapping.launch.py
 COPY arduino_bridge.py /opt/robot/arduino_bridge.py
 COPY lidar_scan_filter.py /opt/robot/lidar_scan_filter.py
 COPY encoder_odometry.py /opt/robot/encoder_odometry.py
-RUN chmod +x /opt/robot/arduino_bridge.py /opt/robot/lidar_scan_filter.py /opt/robot/encoder_odometry.py
+COPY human_tracker.py /opt/robot/human_tracker.py
+COPY rover_controller.py /opt/robot/rover_controller.py
+COPY button_io.py /opt/robot/button_io.py
+COPY mission_manager.py /opt/robot/mission_manager.py
+COPY breadcrumb_manager.py /opt/robot/breadcrumb_manager.py
+COPY backtrack_navigator.py /opt/robot/backtrack_navigator.py
+RUN chmod +x /opt/robot/arduino_bridge.py /opt/robot/lidar_scan_filter.py /opt/robot/encoder_odometry.py \
+    /opt/robot/human_tracker.py /opt/robot/rover_controller.py /opt/robot/button_io.py \
+    /opt/robot/mission_manager.py /opt/robot/breadcrumb_manager.py /opt/robot/backtrack_navigator.py
 CMD ["bash", "-lc", "source /opt/ros/jazzy/setup.bash && source /opt/robot_ws/install/setup.bash && exec ros2 launch /opt/robot/mapping.launch.py"]

@@ -47,6 +47,30 @@ def generate_launch_description():
             cmd=['python3', '/opt/robot/encoder_odometry.py'],
             output='screen',
         ),
+        ExecuteProcess(
+            cmd=['python3', '/opt/robot/human_tracker.py'],
+            output='screen',
+        ),
+        ExecuteProcess(
+            cmd=['python3', '/opt/robot/rover_controller.py'],
+            output='screen',
+        ),
+        ExecuteProcess(
+            cmd=['python3', '/opt/robot/button_io.py'],
+            output='screen',
+        ),
+        ExecuteProcess(
+            cmd=['python3', '/opt/robot/mission_manager.py'],
+            output='screen',
+        ),
+        ExecuteProcess(
+            cmd=['python3', '/opt/robot/breadcrumb_manager.py'],
+            output='screen',
+        ),
+        ExecuteProcess(
+            cmd=['python3', '/opt/robot/backtrack_navigator.py'],
+            output='screen',
+        ),
         Node(
             package='tf2_ros',
             executable='static_transform_publisher',

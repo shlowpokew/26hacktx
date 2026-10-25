@@ -136,10 +136,12 @@ sudo docker compose exec mapping bash -lc 'source /opt/ros/jazzy/setup.bash; ros
 ```
 
 The Arduino and robot must be on a network that lets UDP through on ports
-4210 and 4211. Initial DRV8833 wiring uses D5/D6 for the left channel, D9/D10
-for the right channel, and D8 for shared nSLEEP. Match both channels to the
-motor driver's IN1/IN2 pins and verify wheel direction with the wheels raised
-before putting the rover on the ground.
+4210 and 4211. The current sketch uses D5/D6 for the left channel, D9/D10
+for the right channel, and D8 for a shared sleep input. Confirm the exact
+driver board's pinout and voltage/current ratings before wiring. The selected
+gear motors are listed as 12 V, so the motor supply must stay within the
+driver's rating. Verify wheel direction with the wheels raised before putting
+the rover on the ground.
 
 ## Maps and bags
 
@@ -153,7 +155,7 @@ sudo docker compose exec mapping bash -lc 'source /opt/ros/jazzy/setup.bash; ros
 To replay a bag, set `USE_SIM_TIME=true` in `.env`, push, stop the live sensor
 drivers, and play the bag with `--clock`. Set it back to `false` for live runs.
 
-## What's still needed for real mapping
+## LiDAR, odometry, follow, and return
 
 The container builds LDROBOT's ROS 2 driver v3.0.3 for the LD19/D300 and
 launches it on `/dev/lidar` at 230400 baud. A scan filter publishes `/scan` in
@@ -170,24 +172,37 @@ starts. Set `GPIO_DEVICE` if the host exposes the Pi 5 GPIO chip under a
 different `/dev/gpiochip*` name; the container maps the selected device to
 `/dev/gpiochip4`.
 
-Calibrate `DRIVE_WHEEL_RADIUS_M`, `DRIVE_WHEEL_BASE_M`, and
-`ENCODER_TICKS_PER_REV` for the installed wheels and encoder gearing. Rotate a
-wheel exactly once and measure the change in the corresponding GPIO Zero
-encoder `steps` to determine ticks per wheel revolution. Set
+The linked 25GA370 motor listing identifies a quadrature encoder with 240
+pulses per output-shaft revolution, so `ENCODER_TICKS_PER_REV` defaults to 240.
+Confirm this by rotating a wheel exactly once and measuring the change in the
+corresponding GPIO Zero encoder `steps`. Calibrate `DRIVE_WHEEL_RADIUS_M` and
+`DRIVE_WHEEL_BASE_M` for the assembled rover. Set
 `LEFT_ENCODER_SIGN` or `RIGHT_ENCODER_SIGN` to `-1` if forward wheel rotation
-decreases that encoder's count.
+decreases that encoder's count. The motor listing specifies a 5 V encoder
+supply; Raspberry Pi GPIO is 3.3 V and not 5 V tolerant. Level shift A/B or
+confirm their output levels stay at or below 3.3 V before connecting them.
 
-SLAM Toolbox now receives wheel odometry on `/odom`; verify the encoder pin
+SLAM Toolbox receives wheel odometry on `/odom`; verify the encoder pin
 numbers, tick count, wheel radius, and wheel spacing on the assembled rover.
 The expected TF chain is `map -> odom -> base_link -> laser`. Set
 `scan_topic`, `base_frame`, `odom_frame`, and `map_frame` in `config/slam.yaml`
 to match the robot. Nav2 is installed but not launched.
 
-The human-follow, breadcrumb return, onboard buttons/display, and SOS audio
-nodes described by the full spec are not implemented yet. Nav2 is installed
-but is not launched. Use the same `ROS_DOMAIN_ID` on every machine that talks
-to the robot. Host networking is Linux-only, and Tailscale alone does not
-carry DDS discovery across networks.
+The follow stack clusters person-sized scan segments, locks the nearest
+candidate in a ±30° front arc while follow mode is enabled, and drives to a
+1.0 m stand-off. It stops for stale scan/target data or an obstacle within
+0.25 m in the forward ±25° arc. Button A starts follow-and-record from idle.
+Button B begins reverse breadcrumb navigation while following. Hold B for 3
+seconds to enter SOS; press A to return to idle. Breadcrumb poses are stored in
+`/maps/breadcrumbs.json` every 0.25 m or 15° of heading change and replayed
+from the latest pose toward the start. Button GPIO pins default to BCM 5 and 6.
+
+The current follow, breadcrumb return, and button state machine are software
+implementations that still need calibration and hardware validation on the
+assembled rover. The onboard display/eye animation and SOS audio playback are
+still outstanding. Use the same `ROS_DOMAIN_ID` on every machine that talks to
+the robot. Host networking is Linux-only, and Tailscale alone does not carry
+DDS discovery across networks.
 
 ## Reproducibility
 

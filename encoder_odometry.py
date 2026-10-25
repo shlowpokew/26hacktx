@@ -21,7 +21,7 @@ class EncoderOdometry(Node):
         self._left_b = int(os.environ.get("LEFT_ENCODER_B_BCM", "18"))
         self._right_a = int(os.environ.get("RIGHT_ENCODER_A_BCM", "22"))
         self._right_b = int(os.environ.get("RIGHT_ENCODER_B_BCM", "23"))
-        self._ticks_per_rev = float(os.environ.get("ENCODER_TICKS_PER_REV", "360"))
+        self._ticks_per_rev = float(os.environ.get("ENCODER_TICKS_PER_REV", "240"))
         self._wheel_radius = float(os.environ.get("DRIVE_WHEEL_RADIUS_M", "0.05"))
         self._wheel_base = float(os.environ.get("DRIVE_WHEEL_BASE_M", "0.32"))
         self._left_sign = int(os.environ.get("LEFT_ENCODER_SIGN", "1"))
