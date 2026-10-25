@@ -14,13 +14,14 @@ services:
       - ${GPIO_DEVICE:-/dev/gpiochip4}:/dev/gpiochip4
       - ${LCD_I2C_DEVICE:-/dev/i2c-1}:/dev/i2c-1
       - /dev/snd:/dev/snd
+      # Off until UNO_DEVICE=/dev/uno is set in .env: Compose won't start the
+      # container if a listed device is missing, and /dev/null always exists.
+      - ${UNO_DEVICE:-/dev/null}:/dev/uno
     environment:
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-42}
       RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
       USE_SIM_TIME: ${USE_SIM_TIME:-false}
-      ARDUINO_IP: ${ARDUINO_IP:-}
-      ARDUINO_PORT: ${ARDUINO_PORT:-4210}
-      ARDUINO_LOCAL_PORT: ${ARDUINO_LOCAL_PORT:-4211}
+      MANUAL_COMMAND_SEC: ${MANUAL_COMMAND_SEC:-2.0}
       DRIVE_WHEEL_BASE_M: ${DRIVE_WHEEL_BASE_M:-0.32}
       DRIVE_MAX_LINEAR_MPS: ${DRIVE_MAX_LINEAR_MPS:-0.5}
       CMD_VEL_TIMEOUT_SEC: ${CMD_VEL_TIMEOUT_SEC:-0.5}

@@ -1,0 +1,40 @@
+[package]
+name = "uno-firmware"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "uno-firmware"
+test = false
+bench = false
+
+[features]
+# Drive a DRV8833 on D5/D6 (left) and D9/D10 (right) with nSLEEP on D8.
+# `--no-default-features` builds a dry run that reports PWM but moves nothing.
+default = ["drv8833"]
+drv8833 = []
+
+[dependencies]
+uno-brain = { path = "../brain" }
+panic-halt = "1.0.0"
+ufmt = "0.2.0"
+embedded-hal = "1.0"
+avr-device = "0.8.1"
+
+[dependencies.arduino-hal]
+git = "https://github.com/rahix/avr-hal"
+rev = "e5c8f37fe48419956e722490a82b9ca9b9fc61a2"
+features = ["arduino-uno"]
+
+# AVRs have very little program memory.
+[profile.dev]
+panic = "abort"
+lto = true
+opt-level = "s"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+debug = true
+lto = true
+opt-level = "s"

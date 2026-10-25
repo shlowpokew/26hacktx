@@ -2,3 +2,4 @@ maps/*
 bags/*
 *.tar.gz
 __pycache__/
+arduino_uno_rs/*/target/

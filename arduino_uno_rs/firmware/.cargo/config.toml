@@ -1,0 +1,10 @@
+[build]
+target = "avr-none"
+rustflags = ["-C", "target-cpu=atmega328p"]
+rustdocflags = ["-C", "target-cpu=atmega328p"]
+
+[target.'cfg(target_arch = "avr")']
+runner = "ravedude"
+
+[unstable]
+build-std = ["core"]

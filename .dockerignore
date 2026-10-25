@@ -3,3 +3,6 @@ bags
 *.tar.gz
 .git
 __pycache__
+arduino_uno_rs
+tests
+Makefile

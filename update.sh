@@ -64,4 +64,7 @@ fi
 if grep -qx 'install.sh' <<<"$changed"; then
   echo 'install.sh changed; rerun "bash install.sh" to apply host-level changes.'
 fi
+if grep -q '^arduino_uno_rs/' <<<"$changed"; then
+  echo 'Uno firmware changed; run "bash flash_uno.sh" to flash it (wheels off the ground).'
+fi
 echo 'Update applied.'

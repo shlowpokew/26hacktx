@@ -1,0 +1,5 @@
+[general]
+board = "uno"
+# After flashing, show the Uno's telemetry lines.
+open-console = true
+serial-baudrate = 57600

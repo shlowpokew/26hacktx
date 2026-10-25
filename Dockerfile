@@ -41,6 +41,7 @@ RUN python3 /opt/robot/generate_audio_assets.py /opt/robot/audio \
 
 COPY mapping.launch.py /opt/robot/mapping.launch.py
 COPY arduino_bridge.py /opt/robot/arduino_bridge.py
+COPY uno_link.py /opt/robot/uno_link.py
 COPY lidar_scan_filter.py /opt/robot/lidar_scan_filter.py
 COPY encoder_odometry.py /opt/robot/encoder_odometry.py
 COPY human_tracker.py /opt/robot/human_tracker.py
