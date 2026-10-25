@@ -137,11 +137,12 @@ sudo docker compose exec mapping bash -lc 'source /opt/ros/jazzy/setup.bash; ros
 
 The Arduino and robot must be on a network that lets UDP through on ports
 4210 and 4211. The current sketch uses D5/D6 for the left channel, D9/D10
-for the right channel, and D8 for a shared sleep input. Confirm the exact
-driver board's pinout and voltage/current ratings before wiring. The selected
-gear motors are listed as 12 V, so the motor supply must stay within the
-driver's rating. Verify wheel direction with the wheels raised before putting
-the rover on the ground.
+for the right channel, and D8 for shared nSLEEP. The [HiLetgo DRV3388 board](https://a.co/d/0bgRQ39d)
+uses a DRV8833, whose [motor supply range tops out at 10.8 V](https://www.ti.com/lit/ds/symlink/drv8833.pdf).
+The linked gear motors are rated for 12 V, so do not connect a 12 V supply to
+this driver; use a supply within the driver's range or replace it with a
+12 V-rated driver. Verify wheel direction with the wheels raised before
+putting the rover on the ground.
 
 ## Maps and bags
 
@@ -188,10 +189,16 @@ The expected TF chain is `map -> odom -> base_link -> laser`. Set
 `scan_topic`, `base_frame`, `odom_frame`, and `map_frame` in `config/slam.yaml`
 to match the robot. Nav2 is installed but not launched.
 
-The follow stack clusters person-sized scan segments, locks the nearest
-candidate in a ±30° front arc while follow mode is enabled, and drives to a
-1.0 m stand-off. It stops for stale scan/target data or an obstacle within
-0.25 m in the forward ±25° arc. Button A starts follow-and-record from idle.
+The follow stack uses the [UPO LFE-PPN 2D-LiDAR detector](https://github.com/robotics-upo/upo_laser_people_detector)
+and its pretrained ONNX model. Docker downloads the model while building the
+image; an ARM64 ONNX Runtime CPU session runs it on the Pi 5, and inference
+runs only while follow mode is enabled. The ROS node adapts the project's
+LFE-PPN input normalization, anchor decoding, score threshold, and NMS to the
+rover's scan and target topics. The nearest detection in a ±30° front arc is
+selected, then associated across scans to retain a target lock. The rover
+drives to a 1.0 m stand-off and stops for stale scan/target data or an obstacle
+within 0.25 m in the forward ±25° arc. Button A starts follow-and-record from
+idle.
 Button B begins reverse breadcrumb navigation while following. Hold B for 3
 seconds to enter SOS; press A to return to idle. Breadcrumb poses are stored in
 `/maps/breadcrumbs.json` every 0.25 m or 15° of heading change and replayed

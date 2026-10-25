@@ -7,7 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-jazzy-robot-state-publisher ros-jazzy-xacro ros-jazzy-tf2-tools \
     ros-jazzy-rosbag2 ros-jazzy-rosbag2-storage-mcap \
     python3-colcon-common-extensions python3-rosdep python3-gpiozero python3-lgpio \
-    build-essential git \
+    build-essential git curl python3-venv \
     && dpkg-query -W > /opt/ros/package-manifest.txt \
     && rm -rf /var/lib/apt/lists/*
 
@@ -20,6 +20,15 @@ RUN mkdir -p /opt/robot_ws/src \
     && cd /opt/robot_ws \
     && colcon build --merge-install --packages-select ldlidar_stl_ros2 \
     && dpkg-query -W > /opt/ros/package-manifest.txt
+
+# LFE-PPN is the UPO 2D-LiDAR people detector. Use its ONNX model with the
+# ARM64 CPU provider on the Raspberry Pi 5 (CUDA is not available on this host).
+RUN python3 -m venv --system-site-packages /opt/robot-venv \
+    && /opt/robot-venv/bin/pip install --no-cache-dir onnxruntime==1.20.1 \
+    && mkdir -p /opt/robot/models \
+    && curl --fail --location --retry 3 \
+       https://robotics.upo.es/~famozur/onnx/LFE-PPN.onnx \
+       --output /opt/robot/models/LFE-PPN.onnx
 
 COPY mapping.launch.py /opt/robot/mapping.launch.py
 COPY arduino_bridge.py /opt/robot/arduino_bridge.py

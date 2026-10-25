@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Track a person-sized cluster from the LD19 scan while follow mode is on."""
+"""Run the UPO LFE-PPN 2D-LiDAR people detector while follow mode is enabled."""
 
 import math
 import os
 import time
 from typing import Optional
 
+import numpy as np
+import onnxruntime as ort
 import rclpy
 from geometry_msgs.msg import PoseStamped
 from rclpy.node import Node
@@ -18,17 +20,35 @@ class HumanTracker(Node):
         super().__init__("human_tracker")
         self._range_min = float(os.environ.get("TRACKER_MIN_RANGE_M", "0.10"))
         self._range_max = float(os.environ.get("TRACKER_MAX_RANGE_M", "3.0"))
-        self._cluster_gap = float(os.environ.get("TRACKER_CLUSTER_GAP_M", "0.15"))
-        self._min_width = float(os.environ.get("TRACKER_MIN_WIDTH_M", "0.10"))
-        self._max_width = float(os.environ.get("TRACKER_MAX_WIDTH_M", "0.50"))
         self._front_arc_deg = float(os.environ.get("TRACKER_FRONT_ARC_DEG", "30"))
         self._association_distance = float(
             os.environ.get("TRACKER_ASSOCIATION_DISTANCE_M", "0.60")
         )
         self._target_timeout = float(os.environ.get("TRACKER_TARGET_TIMEOUT_SEC", "0.5"))
+        self._score_threshold = float(os.environ.get("HUMAN_DETECTOR_SCORE_THRESHOLD", "0.937660"))
+        self._scan_near = float(os.environ.get("HUMAN_DETECTOR_SCAN_NEAR_M", "0.02"))
+        self._scan_far = float(os.environ.get("HUMAN_DETECTOR_SCAN_FAR_M", "10.0"))
         self._lidar_x = float(os.environ.get("LIDAR_X_M", "0.0"))
         self._lidar_y = float(os.environ.get("LIDAR_Y_M", "0.0"))
         self._lidar_yaw = float(os.environ.get("LIDAR_YAW_RAD", "0.0"))
+        model_path = os.environ.get("HUMAN_DETECTOR_MODEL", "/opt/robot/models/LFE-PPN.onnx")
+        if not 0.0 <= self._score_threshold <= 1.0:
+            raise ValueError("HUMAN_DETECTOR_SCORE_THRESHOLD must be in [0, 1]")
+        if self._scan_near < 0 or self._scan_far <= self._scan_near:
+            raise ValueError("Detector scan limits must satisfy 0 <= near < far")
+        if min(self._range_min, self._range_max, self._association_distance,
+               self._target_timeout) <= 0:
+            raise ValueError("Tracker ranges, association distance, and timeout must be positive")
+
+        options = ort.SessionOptions()
+        options.intra_op_num_threads = max(1, int(os.environ.get("HUMAN_DETECTOR_THREADS", "2")))
+        options.inter_op_num_threads = 1
+        # The Raspberry Pi 5 has no CUDA device; use ONNX Runtime's ARM64 CPU provider.
+        self._session = ort.InferenceSession(
+            model_path, sess_options=options, providers=["CPUExecutionProvider"]
+        )
+        self._input_name = self._session.get_inputs()[0].name
+        self._output_name = self._session.get_outputs()[0].name
         self._enabled = False
         self._target: Optional[tuple[float, float]] = None
         self._last_target_at: Optional[float] = None
@@ -41,8 +61,8 @@ class HumanTracker(Node):
             Bool, "/follow/enable", self._set_enabled, 10
         )
         self.get_logger().info(
-            f"Person cluster width {self._min_width:.2f}–{self._max_width:.2f} m; "
-            f"front lock arc ±{self._front_arc_deg:g}°"
+            f"UPO LFE-PPN loaded from {model_path}; CPU threads={options.intra_op_num_threads}, "
+            f"score threshold={self._score_threshold:.4f}"
         )
 
     def _set_enabled(self, message: Bool) -> None:
@@ -54,26 +74,19 @@ class HumanTracker(Node):
     def _scan(self, scan: LaserScan) -> None:
         if not self._enabled:
             return
-        points = []
-        for index, distance in enumerate(scan.ranges):
-            if not math.isfinite(distance) or not self._range_min <= distance <= self._range_max:
-                continue
-            angle = scan.angle_min + index * scan.angle_increment + self._lidar_yaw
-            x = distance * math.cos(angle)
-            y = distance * math.sin(angle)
-            points.append((self._lidar_x + x, self._lidar_y + y))
 
-        clusters = self._clusters(points)
-        candidates = []
-        for cluster in clusters:
-            width = self._cluster_width(cluster)
-            if not self._min_width <= width <= self._max_width:
-                continue
-            x = sum(point[0] for point in cluster) / len(cluster)
-            y = sum(point[1] for point in cluster) / len(cluster)
-            angle = math.atan2(y, x)
-            if x > 0 and abs(angle) <= math.radians(self._front_arc_deg):
-                candidates.append((x, y))
+        distances = np.asarray(scan.ranges, dtype=np.float32)
+        # UPO's LFE-PPN input is 1 - range / scan_far; invalid beams represent
+        # no return and therefore use scan_far (zero after normalization).
+        distances = np.nan_to_num(
+            distances, nan=self._scan_far, posinf=self._scan_far, neginf=self._scan_far
+        )
+        distances = np.clip(distances, 0.0, self._scan_far)
+        model_input = (1.0 - distances / self._scan_far).reshape(1, -1, 1)
+        grid = self._session.run(
+            [self._output_name], {self._input_name: model_input}
+        )[0]
+        candidates = self._decode_detections(grid, scan)
 
         chosen = self._associate(candidates)
         now = time.monotonic()
@@ -99,25 +112,47 @@ class HumanTracker(Node):
         target.pose.orientation.w = 1.0
         self._target_publisher.publish(target)
 
-    def _clusters(self, points: list[tuple[float, float]]) -> list[list[tuple[float, float]]]:
-        clusters: list[list[tuple[float, float]]] = []
-        for point in points:
-            if not clusters or math.dist(point, clusters[-1][-1]) > self._cluster_gap:
-                clusters.append([point])
-            else:
-                clusters[-1].append(point)
-        if len(clusters) > 1 and len(clusters[0]) and len(clusters[-1]):
-            if math.dist(clusters[0][0], clusters[-1][-1]) <= self._cluster_gap:
-                clusters[0] = clusters[-1] + clusters[0]
-                clusters.pop()
-        return [cluster for cluster in clusters if len(cluster) >= 3]
-
-    @staticmethod
-    def _cluster_width(cluster: list[tuple[float, float]]) -> float:
-        return max(
-            (math.dist(a, b) for index, a in enumerate(cluster) for b in cluster[index + 1:]),
-            default=0.0,
+    def _decode_detections(
+        self, grid: np.ndarray, scan: LaserScan
+    ) -> list[tuple[float, float]]:
+        if grid.ndim != 4 or grid.shape[0] != 1 or grid.shape[3] != 3:
+            self.get_logger().error(f"Unexpected LFE-PPN output shape: {grid.shape}")
+            return []
+        sectors, anchors = grid.shape[1], grid.shape[2]
+        anchor_depth = (self._scan_far - self._scan_near) / anchors
+        sector_width = (scan.angle_max - scan.angle_min) / sectors
+        flat = grid.reshape(-1, 3)
+        order = np.flatnonzero(
+            np.all(np.isfinite(flat), axis=1) & (flat[:, 0] >= self._score_threshold)
         )
+        order = order[np.argsort(flat[order, 0])[::-1]]
+        people: list[tuple[float, float]] = []
+        suppressed: list[tuple[float, float]] = []
+        for index in order:
+            score, distance_offset, angle_offset = flat[index]
+            sector = int(index) // anchors
+            anchor = int(index) % anchors
+            anchor_distance = self._scan_near + (0.5 + anchor) * anchor_depth
+            angle = scan.angle_min + (0.5 + sector) * sector_width
+            distance = anchor_distance + float(distance_offset) * anchor_depth
+            angle += float(angle_offset) * anchor_depth / max(anchor_distance, 1e-6)
+            lidar_x = distance * math.cos(angle)
+            lidar_y = distance * math.sin(angle)
+
+            # Match the UPO detector's non-maximum suppression radius (0.4 m).
+            if any(math.hypot(lidar_x - x, lidar_y - y) < 0.8 for x, y in suppressed):
+                continue
+            suppressed.append((lidar_x, lidar_y))
+            base_x = self._lidar_x + lidar_x * math.cos(self._lidar_yaw) - lidar_y * math.sin(self._lidar_yaw)
+            base_y = self._lidar_y + lidar_x * math.sin(self._lidar_yaw) + lidar_y * math.cos(self._lidar_yaw)
+            base_distance = math.hypot(base_x, base_y)
+            base_angle = math.atan2(base_y, base_x)
+            if not self._range_min <= base_distance <= self._range_max:
+                continue
+            if base_x <= 0 or abs(base_angle) > math.radians(self._front_arc_deg):
+                continue
+            people.append((base_x, base_y))
+        return people
 
     def _associate(
         self, candidates: list[tuple[float, float]]

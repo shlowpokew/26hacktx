@@ -48,7 +48,7 @@ def generate_launch_description():
             output='screen',
         ),
         ExecuteProcess(
-            cmd=['python3', '/opt/robot/human_tracker.py'],
+            cmd=['/opt/robot-venv/bin/python3', '/opt/robot/human_tracker.py'],
             output='screen',
         ),
         ExecuteProcess(
