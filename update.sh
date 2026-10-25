@@ -25,10 +25,19 @@ if ! as_owner git rev-parse --verify --quiet '@{u}' >/dev/null; then
   echo 'This branch has no upstream. Run: git branch --set-upstream-to=origin/main' >&2
   exit 1
 fi
+# install.sh writes .env only once, so carry changed defaults forward here.
+# Only the old default is rewritten; a calibrated value is left alone.
+migrated=false
+if grep -qx 'ENCODER_TICKS_PER_REV=240' .env 2>/dev/null; then
+  as_owner sed -i 's/^ENCODER_TICKS_PER_REV=240$/ENCODER_TICKS_PER_REV=480/' .env
+  echo '.env: ENCODER_TICKS_PER_REV 240 -> 480 (the Uno counts both edges of encoder A)'
+  migrated=true
+fi
+
 as_owner git fetch --quiet
 old=$(as_owner git rev-parse HEAD)
 new=$(as_owner git rev-parse '@{u}')
-if [[ $old == "$new" ]] && ! $force; then
+if [[ $old == "$new" ]] && ! $force && ! $migrated; then
   exit 0
 fi
 
