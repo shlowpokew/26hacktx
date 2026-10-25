@@ -7,7 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-jazzy-robot-state-publisher ros-jazzy-xacro ros-jazzy-tf2-tools \
     ros-jazzy-rosbag2 ros-jazzy-rosbag2-storage-mcap \
     python3-colcon-common-extensions python3-rosdep python3-gpiozero python3-lgpio \
-    build-essential git curl python3-venv \
+    alsa-utils espeak-ng build-essential git curl python3-venv \
     && dpkg-query -W > /opt/ros/package-manifest.txt \
     && rm -rf /var/lib/apt/lists/*
 
@@ -24,11 +24,20 @@ RUN mkdir -p /opt/robot_ws/src \
 # LFE-PPN is the UPO 2D-LiDAR people detector. Use its ONNX model with the
 # ARM64 CPU provider on the Raspberry Pi 5 (CUDA is not available on this host).
 RUN python3 -m venv --system-site-packages /opt/robot-venv \
-    && /opt/robot-venv/bin/pip install --no-cache-dir onnxruntime==1.20.1 \
+    && /opt/robot-venv/bin/pip install --no-cache-dir onnxruntime==1.20.1 smbus2==0.5.0 \
     && mkdir -p /opt/robot/models \
     && curl --fail --location --retry 3 \
        https://robotics.upo.es/~famozur/onnx/LFE-PPN.onnx \
        --output /opt/robot/models/LFE-PPN.onnx
+
+COPY generate_audio_assets.py /opt/robot/generate_audio_assets.py
+RUN python3 /opt/robot/generate_audio_assets.py /opt/robot/audio \
+    && espeak-ng -v en-us -s 145 -a 145 \
+       -w /opt/robot/audio/sos.wav \
+       'Please help! Emergency on trail!' \
+    && espeak-ng -v en-us -s 165 -a 200 \
+       -w /opt/robot/audio/sos_loud.wav \
+       'Please help! Emergency on trail!'
 
 COPY mapping.launch.py /opt/robot/mapping.launch.py
 COPY arduino_bridge.py /opt/robot/arduino_bridge.py
@@ -40,7 +49,11 @@ COPY button_io.py /opt/robot/button_io.py
 COPY mission_manager.py /opt/robot/mission_manager.py
 COPY breadcrumb_manager.py /opt/robot/breadcrumb_manager.py
 COPY backtrack_navigator.py /opt/robot/backtrack_navigator.py
+COPY sos_seeking_controller.py /opt/robot/sos_seeking_controller.py
+COPY display_feedback.py /opt/robot/display_feedback.py
+COPY sos_audio.py /opt/robot/sos_audio.py
 RUN chmod +x /opt/robot/arduino_bridge.py /opt/robot/lidar_scan_filter.py /opt/robot/encoder_odometry.py \
     /opt/robot/human_tracker.py /opt/robot/rover_controller.py /opt/robot/button_io.py \
-    /opt/robot/mission_manager.py /opt/robot/breadcrumb_manager.py /opt/robot/backtrack_navigator.py
+    /opt/robot/mission_manager.py /opt/robot/breadcrumb_manager.py /opt/robot/backtrack_navigator.py \
+    /opt/robot/sos_seeking_controller.py /opt/robot/display_feedback.py /opt/robot/sos_audio.py
 CMD ["bash", "-lc", "source /opt/ros/jazzy/setup.bash && source /opt/robot_ws/install/setup.bash && exec ros2 launch /opt/robot/mapping.launch.py"]

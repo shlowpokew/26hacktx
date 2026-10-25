@@ -19,14 +19,17 @@ class MissionManager(Node):
     def __init__(self) -> None:
         super().__init__("mission_manager")
         self._state = MissionState.IDLE
+        self._backtrack_finished = False
         self._follow_pub = self.create_publisher(Bool, "/follow/enable", 10)
         self._record_pub = self.create_publisher(Bool, "/breadcrumb/recording", 10)
         self._backtrack_pub = self.create_publisher(Bool, "/backtrack/enable", 10)
+        self._seek_pub = self.create_publisher(Bool, "/sos/seek_enable", 10)
         self._state_pub = self.create_publisher(String, "/mission/state", 10)
         self.create_subscription(Bool, "/hardware/button_a", self._button_a, 10)
         self.create_subscription(Bool, "/hardware/button_b", self._button_b, 10)
         self.create_subscription(Bool, "/hardware/sos", self._sos, 10)
         self.create_subscription(Bool, "/backtrack/complete", self._backtrack_complete, 10)
+        self._publish_outputs()
         self._publish_state()
 
     def _button_a(self, message: Bool) -> None:
@@ -48,17 +51,34 @@ class MissionManager(Node):
             self._set_state(MissionState.SOS)
 
     def _backtrack_complete(self, message: Bool) -> None:
-        if message.data and self._state == MissionState.BACKTRACK:
+        if not message.data:
+            return
+        if self._state == MissionState.BACKTRACK:
             self._set_state(MissionState.IDLE)
+        elif self._state == MissionState.SOS:
+            self._backtrack_finished = True
+            self._publish_outputs()
 
     def _set_state(self, state: MissionState) -> None:
         if state == self._state:
             return
+        if state == MissionState.SOS:
+            self._backtrack_finished = False
         self._state = state
+        self._publish_outputs()
+        self._publish_state()
+
+    def _publish_outputs(self) -> None:
+        state = self._state
         self._follow_pub.publish(Bool(data=state == MissionState.FOLLOW))
         self._record_pub.publish(Bool(data=state == MissionState.FOLLOW))
-        self._backtrack_pub.publish(Bool(data=state == MissionState.BACKTRACK))
-        self._publish_state()
+        self._backtrack_pub.publish(Bool(
+            data=state == MissionState.BACKTRACK
+            or (state == MissionState.SOS and not self._backtrack_finished)
+        ))
+        self._seek_pub.publish(Bool(
+            data=state == MissionState.SOS and self._backtrack_finished
+        ))
 
     def _publish_state(self) -> None:
         message = String()

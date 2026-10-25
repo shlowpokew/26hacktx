@@ -9,10 +9,11 @@ from typing import Optional
 import numpy as np
 import onnxruntime as ort
 import rclpy
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import Pose, PoseArray, PoseStamped
 from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Bool
+from std_msgs.msg import String
 
 
 class HumanTracker(Node):
@@ -20,7 +21,7 @@ class HumanTracker(Node):
         super().__init__("human_tracker")
         self._range_min = float(os.environ.get("TRACKER_MIN_RANGE_M", "0.10"))
         self._range_max = float(os.environ.get("TRACKER_MAX_RANGE_M", "3.0"))
-        self._front_arc_deg = float(os.environ.get("TRACKER_FRONT_ARC_DEG", "30"))
+        self._front_arc_deg = float(os.environ.get("TRACKER_FRONT_ARC_DEG", "60"))
         self._association_distance = float(
             os.environ.get("TRACKER_ASSOCIATION_DISTANCE_M", "0.60")
         )
@@ -28,6 +29,9 @@ class HumanTracker(Node):
         self._score_threshold = float(os.environ.get("HUMAN_DETECTOR_SCORE_THRESHOLD", "0.937660"))
         self._scan_near = float(os.environ.get("HUMAN_DETECTOR_SCAN_NEAR_M", "0.02"))
         self._scan_far = float(os.environ.get("HUMAN_DETECTOR_SCAN_FAR_M", "10.0"))
+        self._sos_near_human_range = float(
+            os.environ.get("SOS_NEAR_HUMAN_RANGE_M", "3.0")
+        )
         self._lidar_x = float(os.environ.get("LIDAR_X_M", "0.0"))
         self._lidar_y = float(os.environ.get("LIDAR_Y_M", "0.0"))
         self._lidar_yaw = float(os.environ.get("LIDAR_YAW_RAD", "0.0"))
@@ -49,30 +53,32 @@ class HumanTracker(Node):
         )
         self._input_name = self._session.get_inputs()[0].name
         self._output_name = self._session.get_outputs()[0].name
-        self._enabled = False
+        self._mode = "S0_IDLE"
         self._target: Optional[tuple[float, float]] = None
         self._last_target_at: Optional[float] = None
 
         self._target_publisher = self.create_publisher(PoseStamped, "/human_target", 10)
+        self._sos_targets_publisher = self.create_publisher(PoseArray, "/sos/human_targets", 10)
+        self._sos_nearby_publisher = self.create_publisher(Bool, "/sos/human_nearby", 10)
         self._scan_subscription = self.create_subscription(
             LaserScan, "/scan", self._scan, 10
         )
-        self._enable_subscription = self.create_subscription(
-            Bool, "/follow/enable", self._set_enabled, 10
+        self._mode_subscription = self.create_subscription(
+            String, "/mission/state", self._set_mode, 10
         )
         self.get_logger().info(
             f"UPO LFE-PPN loaded from {model_path}; CPU threads={options.intra_op_num_threads}, "
             f"score threshold={self._score_threshold:.4f}"
         )
 
-    def _set_enabled(self, message: Bool) -> None:
-        if self._enabled and not message.data:
+    def _set_mode(self, message: String) -> None:
+        if message.data != self._mode:
             self._target = None
             self._last_target_at = None
-        self._enabled = message.data
+        self._mode = message.data
 
     def _scan(self, scan: LaserScan) -> None:
-        if not self._enabled:
+        if self._mode not in ("S1_FOLLOW_MAP", "S3_SOS"):
             return
 
         distances = np.asarray(scan.ranges, dtype=np.float32)
@@ -86,7 +92,25 @@ class HumanTracker(Node):
         grid = self._session.run(
             [self._output_name], {self._input_name: model_input}
         )[0]
-        candidates = self._decode_detections(grid, scan)
+        candidates = self._decode_detections(
+            grid, scan, front_only=self._mode == "S1_FOLLOW_MAP"
+        )
+        if self._mode == "S3_SOS":
+            targets = PoseArray()
+            targets.header = scan.header
+            for x, y in candidates:
+                pose = Pose()
+                pose.position.x = x
+                pose.position.y = y
+                pose.orientation.w = 1.0
+                targets.poses.append(pose)
+            self._sos_targets_publisher.publish(targets)
+            nearby = any(
+                math.hypot(x, y) <= self._sos_near_human_range
+                for x, y in candidates
+            )
+            self._sos_nearby_publisher.publish(Bool(data=nearby))
+            return
 
         chosen = self._associate(candidates)
         now = time.monotonic()
@@ -113,7 +137,7 @@ class HumanTracker(Node):
         self._target_publisher.publish(target)
 
     def _decode_detections(
-        self, grid: np.ndarray, scan: LaserScan
+        self, grid: np.ndarray, scan: LaserScan, *, front_only: bool
     ) -> list[tuple[float, float]]:
         if grid.ndim != 4 or grid.shape[0] != 1 or grid.shape[3] != 3:
             self.get_logger().error(f"Unexpected LFE-PPN output shape: {grid.shape}")
@@ -147,9 +171,12 @@ class HumanTracker(Node):
             base_y = self._lidar_y + lidar_x * math.sin(self._lidar_yaw) + lidar_y * math.cos(self._lidar_yaw)
             base_distance = math.hypot(base_x, base_y)
             base_angle = math.atan2(base_y, base_x)
-            if not self._range_min <= base_distance <= self._range_max:
+            minimum_range = 0.60 if self._mode == "S3_SOS" else self._range_min
+            if not minimum_range <= base_distance <= self._range_max:
                 continue
-            if base_x <= 0 or abs(base_angle) > math.radians(self._front_arc_deg):
+            if front_only and (
+                base_x <= 0 or abs(base_angle) > math.radians(self._front_arc_deg)
+            ):
                 continue
             people.append((base_x, base_y))
         return people

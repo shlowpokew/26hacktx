@@ -9,6 +9,7 @@ import rclpy
 from geometry_msgs.msg import TransformStamped
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
+from std_msgs.msg import Float32MultiArray
 from tf2_ros import TransformBroadcaster
 from gpiozero import RotaryEncoder
 from gpiozero.pins.lgpio import LGPIOFactory
@@ -52,6 +53,9 @@ class EncoderOdometry(Node):
         self._angular_speed = 0.0
 
         self._odom_publisher = self.create_publisher(Odometry, "/odom", 10)
+        self._wheel_velocity_publisher = self.create_publisher(
+            Float32MultiArray, "/wheel/velocity", 10
+        )
         self._transform_broadcaster = TransformBroadcaster(self)
         self.create_timer(1.0 / self._publish_rate, self._update)
         self.get_logger().info(
@@ -77,6 +81,9 @@ class EncoderOdometry(Node):
         meters_per_tick = 2.0 * math.pi * self._wheel_radius / self._ticks_per_rev
         left_distance = left_delta * meters_per_tick
         right_distance = right_delta * meters_per_tick
+        wheel_velocity = Float32MultiArray()
+        wheel_velocity.data = [left_distance / dt, right_distance / dt]
+        self._wheel_velocity_publisher.publish(wheel_velocity)
         distance = (left_distance + right_distance) / 2.0
         heading_change = (right_distance - left_distance) / self._wheel_base
         midpoint_heading = self._yaw + heading_change / 2.0

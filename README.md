@@ -114,13 +114,17 @@ ARDUINO_LOCAL_PORT=4211
   `{"type":"command","data":"..."}`. The sketch understands `motor stop`,
   `motor brake`, `motor forward <0-255>`, `motor reverse <0-255>`, and
   `drive <left -255..255> <right -255..255>`.
-- A `geometry_msgs/Twist` on `/cmd_vel` is converted to left/right PWM using
-  differential-drive kinematics. Set `DRIVE_WHEEL_BASE_M` and
-  `DRIVE_MAX_LINEAR_MPS` in `.env` to match the robot. The output is open-loop
-  PWM; encoders are not used for speed control yet.
+- A `geometry_msgs/Twist` on `/cmd_vel` is converted to left/right wheel speed
+  targets using differential-drive kinematics. Encoder feedback from
+  `/wheel/velocity` closes a per-wheel PID loop that sends signed PWM to the
+  Arduino. Tune `DRIVE_PID_KP`, `DRIVE_PID_KI`, `DRIVE_PID_KD`, and
+  `DRIVE_PID_INTEGRAL_LIMIT` after calibrating wheel radius and speed. Missing
+  encoder feedback for `ENCODER_FEEDBACK_TIMEOUT_SEC` stops both motors.
 - The bridge pings every 250 ms. Firmware stops both motors if pings stop for
   1.5 s, and the bridge sends `drive 0 0` if `/cmd_vel` is quiet for
-  `CMD_VEL_TIMEOUT_SEC` (default 0.5 s).
+  `CMD_VEL_TIMEOUT_SEC` (default 0.5 s). It independently stops on stale LiDAR
+  scans or wheel encoder feedback and publishes the reason on
+  `/safety/warning`; the LCD replaces its status line with that stop warning.
 
 Firmware is **not** flashed by the auto-updater, because flashing resets the
 board and can spin the motors. Flash [arduino_r4_wifi/arduino_r4_wifi.ino](arduino_r4_wifi/arduino_r4_wifi.ino)
@@ -194,7 +198,7 @@ and its pretrained ONNX model. Docker downloads the model while building the
 image; an ARM64 ONNX Runtime CPU session runs it on the Pi 5, and inference
 runs only while follow mode is enabled. The ROS node adapts the project's
 LFE-PPN input normalization, anchor decoding, score threshold, and NMS to the
-rover's scan and target topics. The nearest detection in a ±30° front arc is
+rover's scan and target topics. The nearest detection in a ±60° front arc is
 selected, then associated across scans to retain a target lock. The rover
 drives to a 1.0 m stand-off and stops for stale scan/target data or an obstacle
 within 0.25 m in the forward ±25° arc. Button A starts follow-and-record from
@@ -203,13 +207,33 @@ Button B begins reverse breadcrumb navigation while following. Hold B for 3
 seconds to enter SOS; press A to return to idle. Breadcrumb poses are stored in
 `/maps/breadcrumbs.json` every 0.25 m or 15° of heading change and replayed
 from the latest pose toward the start. Button GPIO pins default to BCM 5 and 6.
+During return, a fresh LiDAR scan checks the rear travel corridor across ±45°.
+Below 0.60 m, the rover makes a slow reverse detour toward the clearer side;
+below 0.30 m it stops. It resumes waypoint tracking after the corridor clears,
+which steers it back toward the recorded trail. If scans go stale for 0.5 s,
+the return controller stops.
 
-The current follow, breadcrumb return, and button state machine are software
-implementations that still need calibration and hardware validation on the
-assembled rover. The onboard display/eye animation and SOS audio playback are
-still outstanding. Use the same `ROS_DOMAIN_ID` on every machine that talks to
-the robot. Host networking is Linux-only, and Tailscale alone does not carry
-DDS discovery across networks.
+The Grove RGB LCD connects to the Pi's I2C bus (default `/dev/i2c-1`); the
+container retries if the display is not found. Its 16x2 character cells use
+custom 5x8 glyphs for procedural eyes, randomized idle blinks and gaze,
+human-directed gaze while following, trail scanning while returning, and
+flashing SOS status. The LCD's RGB backlight changes with mission state. The
+driver detects the older RGB address `0x62` and the newer V5 address `0x30`.
+Enable I2C on the Pi and set `LCD_I2C_DEVICE` if its bus device has another
+name. The LCD requires 5 V; V5 supports 3.3 V I2C, while earlier versions may
+need an I2C level shifter before connecting to Pi GPIO.
+
+The Docker image creates local WAV files at build time, including the SOS
+phrase, using offline eSpeak NG. ALSA sends audio through the Pi sound device
+mounted at `/dev/snd`. S1 plays a start chime, S2 plays periodic beeps, and S3
+loops the spoken alert. When the detector sees a person within 3 m, S3 uses a
+louder recording and a shorter pause. After reaching the trailhead in S3, the
+rover slowly approaches the nearest detected person and stops at about 1 m.
+
+Follow, return, SOS seeking, display, and audio still need calibration and
+hardware validation on the assembled rover. Use the same `ROS_DOMAIN_ID` on
+every machine that talks to the robot. Host networking is Linux-only, and
+Tailscale alone does not carry DDS discovery across networks.
 
 ## Reproducibility
 

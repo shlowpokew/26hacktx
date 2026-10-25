@@ -28,13 +28,18 @@ class BacktrackNavigator(Node):
         self._angular_gain = float(os.environ.get("BACKTRACK_ANGULAR_GAIN", "1.5"))
         self._max_angular = float(os.environ.get("DRIVE_MAX_ANGULAR_RPS", "1.0"))
         self._goal_tolerance = float(os.environ.get("BACKTRACK_GOAL_TOLERANCE_M", "0.20"))
-        self._obstacle_distance = float(os.environ.get("OBSTACLE_STOP_DISTANCE_M", "0.25"))
-        self._obstacle_arc_deg = float(os.environ.get("OBSTACLE_STOP_ARC_DEG", "25"))
+        self._detour_distance = float(os.environ.get("BACKTRACK_OBSTACLE_DISTANCE_M", "0.60"))
+        self._emergency_distance = float(os.environ.get("BACKTRACK_EMERGENCY_DISTANCE_M", "0.30"))
+        self._detour_arc_deg = float(os.environ.get("BACKTRACK_OBSTACLE_ARC_DEG", "45"))
+        self._detour_speed = float(os.environ.get("BACKTRACK_DETOUR_SPEED_MPS", "0.08"))
+        self._detour_turn = float(os.environ.get("BACKTRACK_DETOUR_TURN_RPS", "0.35"))
         self._lidar_yaw = float(os.environ.get("LIDAR_YAW_RAD", "0.0"))
         self._enabled = False
         self._trail: list[dict[str, float]] = []
         self._target_index = -1
-        self._obstacle = False
+        self._rear_clearance = math.inf
+        self._left_clearance = math.inf
+        self._right_clearance = math.inf
         self._scan_at: Optional[float] = None
         self._tf_buffer = Buffer(cache_time=Duration(seconds=30.0))
         self._tf_listener = TransformListener(self._tf_buffer, self)
@@ -74,26 +79,39 @@ class BacktrackNavigator(Node):
 
     def _set_scan(self, scan: LaserScan) -> None:
         self._scan_at = time.monotonic()
-        self._obstacle = False
-        half_arc = math.radians(self._obstacle_arc_deg)
+        self._rear_clearance = math.inf
+        self._left_clearance = math.inf
+        self._right_clearance = math.inf
+        half_arc = math.radians(self._detour_arc_deg)
         for index, distance in enumerate(scan.ranges):
-            if not math.isfinite(distance) or distance <= 0:
+            if not math.isfinite(distance) or distance < scan.range_min:
                 continue
             angle = scan.angle_min + index * scan.angle_increment + self._lidar_yaw
             rear_angle = math.atan2(math.sin(angle - math.pi), math.cos(angle - math.pi))
-            if abs(rear_angle) <= half_arc and distance < self._obstacle_distance:
-                self._obstacle = True
-                return
+            if abs(rear_angle) <= half_arc:
+                self._rear_clearance = min(self._rear_clearance, distance)
+                if rear_angle > math.radians(8):
+                    self._left_clearance = min(self._left_clearance, distance)
+                elif rear_angle < -math.radians(8):
+                    self._right_clearance = min(self._right_clearance, distance)
 
     def _navigate(self) -> None:
         if not self._enabled:
             return
-        if (
-            self._obstacle
-            or self._scan_at is None
-            or time.monotonic() - self._scan_at > 0.5
-        ):
+        if self._scan_at is None or time.monotonic() - self._scan_at > 0.5:
             self._publish_stop()
+            return
+        if self._rear_clearance < self._emergency_distance:
+            self._publish_stop()
+            return
+        if self._rear_clearance < self._detour_distance:
+            # Reverse motion curves opposite the body's angular rotation.
+            # Turn the body away from the more obstructed side.
+            turn = -self._detour_turn if self._left_clearance >= self._right_clearance else self._detour_turn
+            command = Twist()
+            command.linear.x = -self._detour_speed
+            command.angular.z = turn
+            self._cmd_publisher.publish(command)
             return
         if self._target_index < 0:
             self._finish()

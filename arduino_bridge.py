@@ -8,7 +8,8 @@ from typing import Optional
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
-from std_msgs.msg import String
+from sensor_msgs.msg import LaserScan
+from std_msgs.msg import Float32MultiArray, String
 
 
 class ArduinoBridge(Node):
@@ -20,23 +21,44 @@ class ArduinoBridge(Node):
         self._wheel_base = float(os.environ.get("DRIVE_WHEEL_BASE_M", "0.32"))
         self._max_linear_speed = float(os.environ.get("DRIVE_MAX_LINEAR_MPS", "0.5"))
         self._cmd_vel_timeout = float(os.environ.get("CMD_VEL_TIMEOUT_SEC", "0.5"))
-        if self._wheel_base <= 0 or self._max_linear_speed <= 0 or self._cmd_vel_timeout <= 0:
+        self._encoder_timeout = float(os.environ.get("ENCODER_FEEDBACK_TIMEOUT_SEC", "0.3"))
+        self._pid_kp = float(os.environ.get("DRIVE_PID_KP", "100.0"))
+        self._pid_ki = float(os.environ.get("DRIVE_PID_KI", "40.0"))
+        self._pid_kd = float(os.environ.get("DRIVE_PID_KD", "0.0"))
+        self._integral_limit = float(os.environ.get("DRIVE_PID_INTEGRAL_LIMIT", "0.5"))
+        if min(self._wheel_base, self._max_linear_speed, self._cmd_vel_timeout,
+               self._encoder_timeout, self._integral_limit) <= 0:
             raise ValueError("Drive dimensions, speed, and command timeout must be positive")
         self._last_cmd_vel_at: Optional[float] = None
+        self._last_wheel_velocity_at: Optional[float] = None
+        self._last_scan_at: Optional[float] = None
+        self._target_wheel_speeds = [0.0, 0.0]
+        self._measured_wheel_speeds = [0.0, 0.0]
+        self._pid_integrals = [0.0, 0.0]
+        self._previous_errors = [0.0, 0.0]
+        self._previous_control_at = time.monotonic()
         self._cmd_vel_timed_out = True
+        self._stop_sent = False
+        self._encoder_timeout_reported = False
+        self._safety_warning = ""
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._socket.bind(("0.0.0.0", self._local_port))
         self._socket.setblocking(False)
 
         self._telemetry = self.create_publisher(String, "/arduino/telemetry", 10)
+        self._safety_publisher = self.create_publisher(String, "/safety/warning", 10)
         self._commands = self.create_subscription(
             String, "/arduino/command", self._send_command, 10
         )
         self._cmd_vel = self.create_subscription(Twist, "/cmd_vel", self._send_cmd_vel, 10)
+        self._wheel_velocity = self.create_subscription(
+            Float32MultiArray, "/wheel/velocity", self._set_wheel_velocity, 10
+        )
+        self._scan = self.create_subscription(LaserScan, "/scan", self._set_scan, 10)
         self.create_timer(0.05, self._receive_messages)
         self.create_timer(0.25, self._send_ping)
-        self.create_timer(0.1, self._check_cmd_vel_timeout)
+        self.create_timer(0.05, self._control_motors)
         if self._arduino_ip:
             self.get_logger().info(
                 f"Arduino UDP bridge listening on {self._local_port}; "
@@ -70,19 +92,119 @@ class ArduinoBridge(Node):
             ratio = self._max_linear_speed / peak
             left *= ratio
             right *= ratio
-        left_pwm = round(left / self._max_linear_speed * 255)
-        right_pwm = round(right / self._max_linear_speed * 255)
-        self._send({"type": "command", "data": f"drive {left_pwm} {right_pwm}"})
+        self._target_wheel_speeds = [left, right]
         self._last_cmd_vel_at = time.monotonic()
         self._cmd_vel_timed_out = False
+        self._stop_sent = False
 
-    def _check_cmd_vel_timeout(self) -> None:
-        if self._last_cmd_vel_at is None or self._cmd_vel_timed_out:
+    def _set_scan(self, _message: LaserScan) -> None:
+        self._last_scan_at = time.monotonic()
+
+    def _set_safety_warning(self, warning: str) -> None:
+        if warning == self._safety_warning:
             return
-        if time.monotonic() - self._last_cmd_vel_at > self._cmd_vel_timeout:
-            self._send({"type": "command", "data": "drive 0 0"})
-            self._cmd_vel_timed_out = True
-            self.get_logger().warn("No /cmd_vel received before timeout; stopping motors")
+        self._safety_warning = warning
+        message = String()
+        message.data = warning
+        self._safety_publisher.publish(message)
+
+    def _set_wheel_velocity(self, message: Float32MultiArray) -> None:
+        if len(message.data) < 2:
+            return
+        self._measured_wheel_speeds = [float(message.data[0]), float(message.data[1])]
+        self._last_wheel_velocity_at = time.monotonic()
+        self._encoder_timeout_reported = False
+
+    def _control_motors(self) -> None:
+        now = time.monotonic()
+        dt = max(0.001, min(now - self._previous_control_at, 0.25))
+        self._previous_control_at = now
+        command_stale = (
+            self._last_cmd_vel_at is None
+            or now - self._last_cmd_vel_at > self._cmd_vel_timeout
+        )
+        if command_stale and self._last_cmd_vel_at is not None:
+            command_was_moving = any(
+                abs(speed) > 1e-3 for speed in self._target_wheel_speeds
+            )
+            if command_was_moving:
+                self._set_safety_warning("Command timeout")
+            elif self._safety_warning == "Command timeout":
+                self._set_safety_warning("")
+        if command_stale:
+            self._target_wheel_speeds = [0.0, 0.0]
+            if not self._cmd_vel_timed_out:
+                self._cmd_vel_timed_out = True
+                self.get_logger().warn("No /cmd_vel received before timeout; stopping motors")
+
+        moving = any(abs(speed) > 1e-3 for speed in self._target_wheel_speeds)
+        scan_stale = self._last_scan_at is None or now - self._last_scan_at > 0.5
+        if moving and scan_stale:
+            self._set_safety_warning("LiDAR scan timeout")
+            self._reset_pid()
+            if not self._stop_sent:
+                self._send({"type": "command", "data": "drive 0 0"})
+                self._stop_sent = True
+            return
+        encoder_stale = (
+            self._last_wheel_velocity_at is None
+            or now - self._last_wheel_velocity_at > self._encoder_timeout
+        )
+        if moving and encoder_stale:
+            self._set_safety_warning("Encoder feedback timeout")
+            self._reset_pid()
+            if not self._stop_sent:
+                self._send({"type": "command", "data": "drive 0 0"})
+                self._stop_sent = True
+            if not self._encoder_timeout_reported:
+                self.get_logger().error("Wheel encoder feedback stale; stopping motors")
+                self._encoder_timeout_reported = True
+            return
+
+        if not moving:
+            if not command_stale and not scan_stale:
+                self._set_safety_warning("")
+            self._reset_pid()
+            if not self._stop_sent:
+                self._send({"type": "command", "data": "drive 0 0"})
+                self._stop_sent = True
+            return
+
+        left_pwm = self._pid_pwm(0, dt)
+        right_pwm = self._pid_pwm(1, dt)
+        self._set_safety_warning("")
+        self._stop_sent = False
+        self._send({
+            "type": "command",
+            "data": f"drive {left_pwm} {right_pwm}",
+        })
+
+    def _pid_pwm(self, wheel: int, dt: float) -> int:
+        target = self._target_wheel_speeds[wheel]
+        measured = self._measured_wheel_speeds[wheel]
+        error = target - measured
+        derivative = (error - self._previous_errors[wheel]) / dt
+        candidate_integral = max(
+            -self._integral_limit,
+            min(self._integral_limit, self._pid_integrals[wheel] + error * dt),
+        )
+        feed_forward = target / self._max_linear_speed * 255.0
+        candidate = (
+            feed_forward + self._pid_kp * error
+            + self._pid_ki * candidate_integral + self._pid_kd * derivative
+        )
+        if abs(candidate) <= 255.0 or candidate * error < 0:
+            self._pid_integrals[wheel] = candidate_integral
+        self._previous_errors[wheel] = error
+        output = (
+            feed_forward + self._pid_kp * error
+            + self._pid_ki * self._pid_integrals[wheel] + self._pid_kd * derivative
+        )
+        return round(max(-255.0, min(255.0, output)))
+
+    def _reset_pid(self) -> None:
+        self._pid_integrals = [0.0, 0.0]
+        self._previous_errors = [0.0, 0.0]
 
     def _send_ping(self) -> None:
         if self._arduino_ip:

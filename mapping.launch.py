@@ -71,6 +71,18 @@ def generate_launch_description():
             cmd=['python3', '/opt/robot/backtrack_navigator.py'],
             output='screen',
         ),
+        ExecuteProcess(
+            cmd=['python3', '/opt/robot/sos_seeking_controller.py'],
+            output='screen',
+        ),
+        ExecuteProcess(
+            cmd=['/opt/robot-venv/bin/python3', '/opt/robot/display_feedback.py'],
+            output='screen',
+        ),
+        ExecuteProcess(
+            cmd=['/opt/robot-venv/bin/python3', '/opt/robot/sos_audio.py'],
+            output='screen',
+        ),
         Node(
             package='tf2_ros',
             executable='static_transform_publisher',
