@@ -6,6 +6,7 @@ import math
 import os
 from pathlib import Path
 import tempfile
+import time
 from typing import Optional
 
 import rclpy
@@ -56,7 +57,12 @@ class BreadcrumbManager(Node):
             2.0 * (rotation.w * rotation.z + rotation.x * rotation.y),
             1.0 - 2.0 * (rotation.y * rotation.y + rotation.z * rotation.z),
         )
-        current = {"x": translation.x, "y": translation.y, "theta": yaw}
+        current = {
+            "x": translation.x,
+            "y": translation.y,
+            "theta": yaw,
+            "timestamp": time.time(),
+        }
         if self._last_recorded is not None:
             distance = math.hypot(
                 current["x"] - self._last_recorded["x"],
@@ -86,6 +92,11 @@ class BreadcrumbManager(Node):
                 temporary.flush()
                 os.fsync(temporary.fileno())
             os.replace(temporary_name, self._path)
+            directory_fd = os.open(self._path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
         finally:
             if temporary_name and os.path.exists(temporary_name):
                 os.unlink(temporary_name)

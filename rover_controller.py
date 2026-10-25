@@ -20,7 +20,13 @@ class RoverController(Node):
         self._max_linear = float(os.environ.get("DRIVE_MAX_LINEAR_MPS", "0.5"))
         self._max_angular = float(os.environ.get("DRIVE_MAX_ANGULAR_RPS", "1.0"))
         self._linear_gain = float(os.environ.get("FOLLOW_LINEAR_GAIN", "0.7"))
+        self._linear_derivative_gain = float(
+            os.environ.get("FOLLOW_LINEAR_DERIVATIVE_GAIN", "0.05")
+        )
         self._angular_gain = float(os.environ.get("FOLLOW_ANGULAR_GAIN", "1.5"))
+        self._angular_derivative_gain = float(
+            os.environ.get("FOLLOW_ANGULAR_DERIVATIVE_GAIN", "0.1")
+        )
         self._obstacle_distance = float(os.environ.get("OBSTACLE_STOP_DISTANCE_M", "0.25"))
         self._obstacle_arc_deg = float(os.environ.get("OBSTACLE_STOP_ARC_DEG", "25"))
         self._data_timeout = float(os.environ.get("FOLLOW_DATA_TIMEOUT_SEC", "0.5"))
@@ -33,6 +39,9 @@ class RoverController(Node):
         self._target_at: Optional[float] = None
         self._obstacle = False
         self._scan_at: Optional[float] = None
+        self._previous_distance_error: Optional[float] = None
+        self._previous_angle_error: Optional[float] = None
+        self._previous_control_at: Optional[float] = None
 
         self._cmd_publisher = self.create_publisher(Twist, "/cmd_vel", 10)
         self._target_subscription = self.create_subscription(
@@ -49,6 +58,7 @@ class RoverController(Node):
     def _set_enabled(self, message: Bool) -> None:
         self._enabled = message.data
         if not self._enabled:
+            self._reset_controller()
             self._publish_stop()
 
     def _set_target(self, message: PoseStamped) -> None:
@@ -79,23 +89,54 @@ class RoverController(Node):
             or now - self._scan_at > self._data_timeout
             or self._obstacle
         ):
+            self._reset_controller()
             self._publish_stop()
             return
 
         x, y = self._target
         distance = math.hypot(x, y)
         angle = math.atan2(y, x)
+        distance_error = distance - self._follow_distance
+        now = time.monotonic()
+        dt = (
+            max(0.01, now - self._previous_control_at)
+            if self._previous_control_at is not None else 0.1
+        )
+        distance_rate = (
+            (distance_error - self._previous_distance_error) / dt
+            if self._previous_distance_error is not None else 0.0
+        )
+        angle_rate = (
+            math.atan2(
+                math.sin(angle - self._previous_angle_error),
+                math.cos(angle - self._previous_angle_error),
+            ) / dt
+            if self._previous_angle_error is not None else 0.0
+        )
+        self._previous_distance_error = distance_error
+        self._previous_angle_error = angle
+        self._previous_control_at = now
         command = Twist()
-        if abs(angle) < math.radians(60) and distance > self._follow_distance:
+        if abs(angle) < math.radians(60) and distance_error > 0:
             command.linear.x = min(
                 self._max_linear,
-                self._linear_gain * (distance - self._follow_distance),
+                max(0.0, self._linear_gain * distance_error
+                    + self._linear_derivative_gain * distance_rate),
             ) * max(0.0, math.cos(angle))
         command.angular.z = max(
             -self._max_angular,
-            min(self._max_angular, self._angular_gain * angle),
+            min(
+                self._max_angular,
+                self._angular_gain * angle
+                + self._angular_derivative_gain * angle_rate,
+            ),
         )
         self._cmd_publisher.publish(command)
+
+    def _reset_controller(self) -> None:
+        self._previous_distance_error = None
+        self._previous_angle_error = None
+        self._previous_control_at = None
 
     def _publish_stop(self) -> None:
         self._cmd_publisher.publish(Twist())

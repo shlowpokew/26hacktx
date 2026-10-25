@@ -41,6 +41,7 @@ class ArduinoBridge(Node):
         self._stop_sent = False
         self._encoder_timeout_reported = False
         self._safety_warning = ""
+        self._mission_mode = "S0_IDLE"
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._socket.bind(("0.0.0.0", self._local_port))
@@ -48,6 +49,9 @@ class ArduinoBridge(Node):
 
         self._telemetry = self.create_publisher(String, "/arduino/telemetry", 10)
         self._safety_publisher = self.create_publisher(String, "/safety/warning", 10)
+        self._mission_state = self.create_subscription(
+            String, "/mission/state", self._set_mission_state, 10
+        )
         self._commands = self.create_subscription(
             String, "/arduino/command", self._send_command, 10
         )
@@ -100,6 +104,11 @@ class ArduinoBridge(Node):
     def _set_scan(self, _message: LaserScan) -> None:
         self._last_scan_at = time.monotonic()
 
+    def _set_mission_state(self, message: String) -> None:
+        self._mission_mode = message.data
+        if self._mission_mode == "S0_IDLE":
+            self._set_safety_warning("")
+
     def _set_safety_warning(self, warning: str) -> None:
         if warning == self._safety_warning:
             return
@@ -123,11 +132,12 @@ class ArduinoBridge(Node):
             self._last_cmd_vel_at is None
             or now - self._last_cmd_vel_at > self._cmd_vel_timeout
         )
-        if command_stale and self._last_cmd_vel_at is not None:
+        mode_active = self._mission_mode != "S0_IDLE"
+        if command_stale and (mode_active or self._last_cmd_vel_at is not None):
             command_was_moving = any(
                 abs(speed) > 1e-3 for speed in self._target_wheel_speeds
             )
-            if command_was_moving:
+            if mode_active or command_was_moving:
                 self._set_safety_warning("Command timeout")
             elif self._safety_warning == "Command timeout":
                 self._set_safety_warning("")
@@ -139,8 +149,9 @@ class ArduinoBridge(Node):
 
         moving = any(abs(speed) > 1e-3 for speed in self._target_wheel_speeds)
         scan_stale = self._last_scan_at is None or now - self._last_scan_at > 0.5
-        if moving and scan_stale:
+        if mode_active and scan_stale:
             self._set_safety_warning("LiDAR scan timeout")
+        if moving and scan_stale:
             self._reset_pid()
             if not self._stop_sent:
                 self._send({"type": "command", "data": "drive 0 0"})
@@ -162,7 +173,7 @@ class ArduinoBridge(Node):
             return
 
         if not moving:
-            if not command_stale and not scan_stale:
+            if not mode_active or (not command_stale and not scan_stale):
                 self._set_safety_warning("")
             self._reset_pid()
             if not self._stop_sent:
@@ -232,6 +243,7 @@ class ArduinoBridge(Node):
             self._telemetry.publish(output)
 
     def destroy_node(self) -> bool:
+        self._send({"type": "command", "data": "drive 0 0"})
         self._socket.close()
         return super().destroy_node()
 

@@ -32,14 +32,23 @@ class BacktrackNavigator(Node):
         self._emergency_distance = float(os.environ.get("BACKTRACK_EMERGENCY_DISTANCE_M", "0.30"))
         self._detour_arc_deg = float(os.environ.get("BACKTRACK_OBSTACLE_ARC_DEG", "45"))
         self._detour_speed = float(os.environ.get("BACKTRACK_DETOUR_SPEED_MPS", "0.08"))
-        self._detour_turn = float(os.environ.get("BACKTRACK_DETOUR_TURN_RPS", "0.35"))
+        self._robot_radius = float(os.environ.get("BACKTRACK_ROBOT_RADIUS_M", "0.22"))
+        self._planner_horizon = float(os.environ.get("BACKTRACK_PLANNER_HORIZON_SEC", "1.0"))
+        self._lidar_x = float(os.environ.get("LIDAR_X_M", "0.0"))
+        self._lidar_y = float(os.environ.get("LIDAR_Y_M", "0.0"))
         self._lidar_yaw = float(os.environ.get("LIDAR_YAW_RAD", "0.0"))
+        if min(self._speed, self._goal_tolerance, self._detour_distance,
+               self._emergency_distance, self._detour_arc_deg, self._detour_speed,
+               self._robot_radius, self._planner_horizon) <= 0:
+            raise ValueError("Backtrack speeds, distances, and planner limits must be positive")
+        if self._emergency_distance >= self._detour_distance:
+            raise ValueError("Emergency obstacle distance must be below the detour distance")
         self._enabled = False
         self._trail: list[dict[str, float]] = []
         self._target_index = -1
+        self._scan_points: list[tuple[float, float]] = []
+        self._front_clearance = math.inf
         self._rear_clearance = math.inf
-        self._left_clearance = math.inf
-        self._right_clearance = math.inf
         self._scan_at: Optional[float] = None
         self._tf_buffer = Buffer(cache_time=Duration(seconds=30.0))
         self._tf_listener = TransformListener(self._tf_buffer, self)
@@ -79,39 +88,28 @@ class BacktrackNavigator(Node):
 
     def _set_scan(self, scan: LaserScan) -> None:
         self._scan_at = time.monotonic()
+        self._scan_points = []
+        self._front_clearance = math.inf
         self._rear_clearance = math.inf
-        self._left_clearance = math.inf
-        self._right_clearance = math.inf
         half_arc = math.radians(self._detour_arc_deg)
         for index, distance in enumerate(scan.ranges):
-            if not math.isfinite(distance) or distance < scan.range_min:
+            if not math.isfinite(distance) or not scan.range_min <= distance <= min(scan.range_max, 3.0):
                 continue
             angle = scan.angle_min + index * scan.angle_increment + self._lidar_yaw
+            x = self._lidar_x + distance * math.cos(angle)
+            y = self._lidar_y + distance * math.sin(angle)
+            self._scan_points.append((x, y))
+            if abs(angle) <= half_arc:
+                self._front_clearance = min(self._front_clearance, distance)
             rear_angle = math.atan2(math.sin(angle - math.pi), math.cos(angle - math.pi))
             if abs(rear_angle) <= half_arc:
                 self._rear_clearance = min(self._rear_clearance, distance)
-                if rear_angle > math.radians(8):
-                    self._left_clearance = min(self._left_clearance, distance)
-                elif rear_angle < -math.radians(8):
-                    self._right_clearance = min(self._right_clearance, distance)
 
     def _navigate(self) -> None:
         if not self._enabled:
             return
         if self._scan_at is None or time.monotonic() - self._scan_at > 0.5:
             self._publish_stop()
-            return
-        if self._rear_clearance < self._emergency_distance:
-            self._publish_stop()
-            return
-        if self._rear_clearance < self._detour_distance:
-            # Reverse motion curves opposite the body's angular rotation.
-            # Turn the body away from the more obstructed side.
-            turn = -self._detour_turn if self._left_clearance >= self._right_clearance else self._detour_turn
-            command = Twist()
-            command.linear.x = -self._detour_speed
-            command.angular.z = turn
-            self._cmd_publisher.publish(command)
             return
         if self._target_index < 0:
             self._finish()
@@ -140,6 +138,21 @@ class BacktrackNavigator(Node):
                 self._finish()
             return
 
+        if min(self._front_clearance, self._rear_clearance) < self._emergency_distance:
+            self._publish_stop()
+            return
+
+        if min(self._front_clearance, self._rear_clearance) < self._detour_distance:
+            bearing_map = math.atan2(dy, dx)
+            goal_x_base = distance * math.cos(bearing_map - yaw)
+            goal_y_base = distance * math.sin(bearing_map - yaw)
+            command = self._choose_detour(goal_x_base, goal_y_base)
+            if command is None:
+                self._publish_stop()
+            else:
+                self._cmd_publisher.publish(command)
+            return
+
         bearing_map = math.atan2(dy, dx)
         bearing_base = math.atan2(
             math.sin(bearing_map - yaw), math.cos(bearing_map - yaw)
@@ -154,6 +167,54 @@ class BacktrackNavigator(Node):
             min(self._max_angular, self._angular_gain * reverse_heading_error),
         )
         self._cmd_publisher.publish(command)
+
+    def _choose_detour(self, goal_x: float, goal_y: float) -> Optional[Twist]:
+        """Pick a safe reverse trajectory that makes progress toward the waypoint."""
+        horizon_steps = max(1, math.ceil(self._planner_horizon / 0.1))
+        dt = self._planner_horizon / horizon_steps
+        best_score = -math.inf
+        best_command: Optional[Twist] = None
+        start_distance = math.hypot(goal_x, goal_y)
+        obstacle_points = [
+            point for point in self._scan_points
+            if math.hypot(*point) <= self._planner_horizon * self._speed + 0.8
+        ]
+        for speed in (-self._detour_speed, -min(self._speed, self._detour_speed * 1.75)):
+            for angular in (-0.9, -0.6, -0.3, 0.0, 0.3, 0.6, 0.9):
+                x = 0.0
+                y = 0.0
+                heading = 0.0
+                clearance_cost = 0.0
+                minimum_clearance = math.inf
+                safe = True
+                for _ in range(horizon_steps):
+                    heading += angular * dt
+                    x += speed * math.cos(heading) * dt
+                    y += speed * math.sin(heading) * dt
+                    for obstacle_x, obstacle_y in obstacle_points:
+                        clearance = math.hypot(x - obstacle_x, y - obstacle_y) - self._robot_radius
+                        minimum_clearance = min(minimum_clearance, clearance)
+                        if clearance <= 0.02:
+                            safe = False
+                            break
+                        if clearance < self._detour_distance:
+                            clearance_cost += (self._detour_distance - clearance) ** 2
+                    if not safe:
+                        break
+                if not safe:
+                    continue
+                progress = start_distance - math.hypot(goal_x - x, goal_y - y)
+                score = (
+                    4.0 * progress
+                    + 0.15 * min(minimum_clearance, 1.0)
+                    - 3.0 * clearance_cost / horizon_steps
+                )
+                if score > best_score:
+                    best_score = score
+                    best_command = Twist()
+                    best_command.linear.x = speed
+                    best_command.angular.z = angular
+        return best_command
 
     def _finish(self) -> None:
         self._enabled = False

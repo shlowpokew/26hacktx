@@ -123,8 +123,10 @@ ARDUINO_LOCAL_PORT=4211
 - The bridge pings every 250 ms. Firmware stops both motors if pings stop for
   1.5 s, and the bridge sends `drive 0 0` if `/cmd_vel` is quiet for
   `CMD_VEL_TIMEOUT_SEC` (default 0.5 s). It independently stops on stale LiDAR
-  scans or wheel encoder feedback and publishes the reason on
+  scans or wheel encoder feedback during motion and publishes the reason on
   `/safety/warning`; the LCD replaces its status line with that stop warning.
+  In an active mission, stale `/cmd_vel` or `/scan` is also reported when a
+  controller has already commanded a stop.
 
 Firmware is **not** flashed by the auto-updater, because flashing resets the
 board and can spin the motors. Flash [arduino_r4_wifi/arduino_r4_wifi.ino](arduino_r4_wifi/arduino_r4_wifi.ino)
@@ -191,7 +193,8 @@ SLAM Toolbox receives wheel odometry on `/odom`; verify the encoder pin
 numbers, tick count, wheel radius, and wheel spacing on the assembled rover.
 The expected TF chain is `map -> odom -> base_link -> laser`. Set
 `scan_topic`, `base_frame`, `odom_frame`, and `map_frame` in `config/slam.yaml`
-to match the robot. Nav2 is installed but not launched.
+to match the robot. Breadcrumb poses include map-frame position, heading, and
+Unix timestamp; each update is atomically replaced and flushed to disk.
 
 The follow stack uses the [UPO LFE-PPN 2D-LiDAR detector](https://github.com/robotics-upo/upo_laser_people_detector)
 and its pretrained ONNX model. Docker downloads the model while building the
@@ -201,17 +204,20 @@ LFE-PPN input normalization, anchor decoding, score threshold, and NMS to the
 rover's scan and target topics. The nearest detection in a ±60° front arc is
 selected, then associated across scans to retain a target lock. The rover
 drives to a 1.0 m stand-off and stops for stale scan/target data or an obstacle
-within 0.25 m in the forward ±25° arc. Button A starts follow-and-record from
-idle.
+within 0.25 m in the forward ±25° arc. Its distance and heading controllers
+include derivative terms to reduce overshoot. Button A starts follow-and-record
+from idle.
 Button B begins reverse breadcrumb navigation while following. Hold B for 3
 seconds to enter SOS; press A to return to idle. Breadcrumb poses are stored in
 `/maps/breadcrumbs.json` every 0.25 m or 15° of heading change and replayed
 from the latest pose toward the start. Button GPIO pins default to BCM 5 and 6.
-During return, a fresh LiDAR scan checks the rear travel corridor across ±45°.
-Below 0.60 m, the rover makes a slow reverse detour toward the clearer side;
-below 0.30 m it stops. It resumes waypoint tracking after the corridor clears,
-which steers it back toward the recorded trail. If scans go stale for 0.5 s,
-the return controller stops.
+During return, a fresh LiDAR scan checks both the specified forward safety
+sector and the rear travel corridor across ±45°. Below 0.60 m, a local
+dynamic-window planner predicts short reverse-drive trajectories against scan
+points and selects a collision-free path that makes progress toward the active
+breadcrumb. It resumes waypoint tracking when clear, rejoining that same
+waypoint. If no candidate path is safe, an obstacle is within 0.30 m, or scans
+go stale for 0.5 s, the controller stops.
 
 The Grove RGB LCD connects to the Pi's I2C bus (default `/dev/i2c-1`); the
 container retries if the display is not found. Its 16x2 character cells use
