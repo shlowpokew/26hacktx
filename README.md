@@ -112,8 +112,15 @@ ARDUINO_LOCAL_PORT=4211
   `std_msgs/String` on `/arduino/telemetry`.
 - Commands: a string published on `/arduino/command` is sent as
   `{"type":"command","data":"..."}`. The sketch understands `motor stop`,
-  `motor brake`, `motor forward <0-255>` and `motor reverse <0-255>`.
-- The bridge pings every 5 s and the sketch answers `pong`.
+  `motor brake`, `motor forward <0-255>`, `motor reverse <0-255>`, and
+  `drive <left -255..255> <right -255..255>`.
+- A `geometry_msgs/Twist` on `/cmd_vel` is converted to left/right PWM using
+  differential-drive kinematics. Set `DRIVE_WHEEL_BASE_M` and
+  `DRIVE_MAX_LINEAR_MPS` in `.env` to match the robot. The output is open-loop
+  PWM; encoders are not used for speed control yet.
+- The bridge pings every 250 ms. Firmware stops both motors if pings stop for
+  1.5 s, and the bridge sends `drive 0 0` if `/cmd_vel` is quiet for
+  `CMD_VEL_TIMEOUT_SEC` (default 0.5 s).
 
 Firmware is **not** flashed by the auto-updater, because flashing resets the
 board and can spin the motors. Flash [arduino_r4_wifi/arduino_r4_wifi.ino](arduino_r4_wifi/arduino_r4_wifi.ino)
@@ -129,7 +136,10 @@ sudo docker compose exec mapping bash -lc 'source /opt/ros/jazzy/setup.bash; ros
 ```
 
 The Arduino and robot must be on a network that lets UDP through on ports
-4210 and 4211.
+4210 and 4211. Initial DRV8833 wiring uses D5/D6 for the left channel, D9/D10
+for the right channel, and D8 for shared nSLEEP. Match both channels to the
+motor driver's IN1/IN2 pins and verify wheel direction with the wheels raised
+before putting the rover on the ground.
 
 ## Maps and bags
 

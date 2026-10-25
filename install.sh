@@ -34,7 +34,7 @@ mkdir -p config maps bags
 if [[ ! -f .env ]]; then
   sudo docker pull ros:jazzy-ros-base-noble
   base_digest=$(sudo docker image inspect ros:jazzy-ros-base-noble --format '{{index .RepoDigests 0}}')
-  printf 'ROS_BASE=%s\nROS_DOMAIN_ID=42\nUSE_SIM_TIME=false\nARDUINO_IP=\nARDUINO_PORT=4210\nARDUINO_LOCAL_PORT=4211\n' "$base_digest" > .env
+  printf 'ROS_BASE=%s\nROS_DOMAIN_ID=42\nUSE_SIM_TIME=false\nARDUINO_IP=\nARDUINO_PORT=4210\nARDUINO_LOCAL_PORT=4211\nDRIVE_WHEEL_BASE_M=0.32\nDRIVE_MAX_LINEAR_MPS=0.5\nCMD_VEL_TIMEOUT_SEC=0.5\n' "$base_digest" > .env
 fi
 sudo docker compose build
 if [[ ! -f config/slam.yaml ]]; then

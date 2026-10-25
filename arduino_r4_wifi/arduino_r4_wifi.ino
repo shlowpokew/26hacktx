@@ -5,9 +5,13 @@ const char* WIFI_PASSWORD = "your-wifi-password";
 const char* ROS_HOST_IP = "192.168.1.100";
 const unsigned int ROS_PORT = 4211;
 const unsigned int ARDUINO_PORT = 4210;
+const unsigned long HEARTBEAT_TIMEOUT_MS = 1500;
 
 WiFiUDP udp;
 String line;
+unsigned long lastHeartbeatMs = 0;
+bool heartbeatSeen = false;
+bool heartbeatExpired = false;
 
 class Drv8833Motor {
  public:
@@ -54,8 +58,28 @@ class Drv8833Motor {
   uint8_t sleepPin_;
 };
 
-// NEED TO FIGURE OUT ports on the motor driver
-Drv8833Motor testMotor(5, 6, 8);
+// DRV8833 inputs: left IN1/IN2 on D5/D6, right IN1/IN2 on D9/D10.
+// Both channels share nSLEEP on D8. Confirm the wiring against your board.
+Drv8833Motor leftMotor(5, 6, 8);
+Drv8833Motor rightMotor(9, 10, 8);
+
+bool parseSpeed(const String& text, int& speed) {
+  if (text.length() == 0) return false;
+  int start = (text[0] == '-') ? 1 : 0;
+  if (start == text.length()) return false;
+  for (int i = start; i < text.length(); ++i) {
+    if (!isDigit(text[i])) return false;
+  }
+  long parsed = text.toInt();
+  if (parsed < -255 || parsed > 255) return false;
+  speed = static_cast<int>(parsed);
+  return true;
+}
+
+void stopMotors() {
+  leftMotor.stop();
+  rightMotor.stop();
+}
 
 void sendMessage(const String& message) {
   udp.beginPacket(ROS_HOST_IP, ROS_PORT);
@@ -73,20 +97,39 @@ void sendStatus(const String& state) {
 }
 
 void handleCommand(const String& command) {
+  if (!heartbeatSeen || millis() - lastHeartbeatMs > HEARTBEAT_TIMEOUT_MS) {
+    stopMotors();
+    sendStatus("no_ros_heartbeat");
+    return;
+  }
   if (command == "motor stop") {
-    testMotor.stop();
+    stopMotors();
     sendStatus("stopped");
   } else if (command == "motor brake") {
-    testMotor.brake();
+    leftMotor.brake();
+    rightMotor.brake();
     sendStatus("braking");
-  } else if (command.startsWith("motor forward ")) {
-    int speed = command.substring(14).toInt();
-    testMotor.setSpeed(speed);
-    sendStatus("forward");
-  } else if (command.startsWith("motor reverse ")) {
-    int speed = command.substring(14).toInt();
-    testMotor.setSpeed(-speed);
-    sendStatus("reverse");
+  } else if (command.startsWith("motor forward ") || command.startsWith("motor reverse ")) {
+    const bool reverse = command.startsWith("motor reverse ");
+    int speed;
+    if (!parseSpeed(command.substring(14), speed) || speed < 0) {
+      sendStatus("invalid_motor_speed");
+      return;
+    }
+    leftMotor.setSpeed(reverse ? -speed : speed);
+    rightMotor.setSpeed(reverse ? -speed : speed);
+    sendStatus(reverse ? "reverse" : "forward");
+  } else if (command.startsWith("drive ")) {
+    int separator = command.indexOf(' ', 6);
+    int leftSpeed, rightSpeed;
+    if (separator < 0 || !parseSpeed(command.substring(6, separator), leftSpeed) ||
+        !parseSpeed(command.substring(separator + 1), rightSpeed)) {
+      sendStatus("invalid_drive_command");
+      return;
+    }
+    leftMotor.setSpeed(leftSpeed);
+    rightMotor.setSpeed(rightSpeed);
+    sendStatus("driving");
   } else {
     sendStatus("unknown_command");
   }
@@ -94,7 +137,9 @@ void handleCommand(const String& command) {
 
 void setup() {
   Serial.begin(115200);
-  testMotor.begin();
+  analogWriteResolution(8);
+  leftMotor.begin();
+  rightMotor.begin();
   while (WiFi.begin(WIFI_SSID, WIFI_PASSWORD) != WL_CONNECTED) {
     delay(5000);
   }
@@ -103,6 +148,14 @@ void setup() {
 }
 
 void loop() {
+  if (heartbeatSeen && millis() - lastHeartbeatMs > HEARTBEAT_TIMEOUT_MS) {
+    stopMotors();
+    if (!heartbeatExpired) {
+      sendStatus("heartbeat_lost");
+      heartbeatExpired = true;
+    }
+  }
+
   int packetSize = udp.parsePacket();
   if (packetSize == 0) {
     delay(5);
@@ -118,6 +171,9 @@ void loop() {
   }
 
   if (line.indexOf("\"type\":\"ping\"") >= 0) {
+    lastHeartbeatMs = millis();
+    heartbeatSeen = true;
+    heartbeatExpired = false;
     sendMessage("{\"type\":\"pong\"}");
   } else if (line.indexOf("\"type\":\"command\"") >= 0) {
     int dataStart = line.indexOf("\"data\":\"");
