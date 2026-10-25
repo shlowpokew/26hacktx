@@ -46,5 +46,34 @@ sudo docker compose config --quiet
 sudo docker compose run --rm --no-deps --entrypoint cat mapping /opt/ros/package-manifest.txt > packages.lock.txt
 sudo docker image inspect local/ros2-robot:jazzy --format '{{.Id}}' > image-id.txt
 sudo docker compose up -d --no-build
+# Auto-update: pull pushed commits every minute and apply them (see update.sh).
+if [[ ${ROS2_AUTO_UPDATE:-1} == 1 ]]; then
+  git rev-parse --verify --quiet '@{u}' >/dev/null ||
+    echo 'Warning: this branch has no Git upstream, so auto-update has nothing to pull.' >&2
+  sudo tee /etc/systemd/system/ros2-update.service >/dev/null <<EOF
+[Unit]
+Description=Pull ROS 2 robot repo from Git and apply changes
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash "$PWD/update.sh"
+EOF
+  sudo tee /etc/systemd/system/ros2-update.timer >/dev/null <<'EOF'
+[Unit]
+Description=Check Git for ROS 2 robot updates every minute
+
+[Timer]
+OnActiveSec=30s
+OnUnitInactiveSec=1min
+
+[Install]
+WantedBy=timers.target
+EOF
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now ros2-update.timer
+  printf '\nAuto-update on: pushed commits are applied within about a minute.\n'
+fi
 printf '\nInstalled. Docker starts at boot; mapping restarts unless explicitly stopped.\n'
 printf 'Mapping still needs a LiDAR driver publishing /scan and robot odometry/transforms.\n'
